@@ -1,0 +1,24 @@
+# GUI & Visualization
+# PyQt5  <-- Installed via Conda (Recommended for Linux)
+napari[all]
+pyvista
+matplotlib
+
+# Medical Image Processing
+SimpleITK
+nibabel
+pydicom
+scikit-image
+opencv-python-headless
+Pillow
+
+# Scientific Computing & Data
+numpy<2.0
+scipy
+pandas
+
+# SAM2 & Model Utilities
+hydra-core>=1.3.2
+iopath
+tqdm
+pyyaml
