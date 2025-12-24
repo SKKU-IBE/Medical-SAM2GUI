@@ -13,7 +13,7 @@ import torch
 # Add parent directory to path if running as script
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from medsam_gui_v5 import (
+from medsam_gui_v5_multi import (
     run_napari_gui_with_navigation,
     DotDict
 )
