@@ -38,7 +38,7 @@ Interactive Medical SAM2 GUI is an open-source, Napari-based application that wr
 
 # Statement of need
 
-Medical segmentation models often require Python expertise and ad hoc preprocessing. Existing GUIs for foundation models frequently ignore medical geometry, lack multi-object tracking, or make manual corrections cumbersome. This project fills that gap by pairing Medical-SAM2 with a streamlined Napari interface that preserves spatial metadata, simplifies prompting, and provides propagation, editing, and volumetry in one place. The tool lowers the barrier for teams that need reproducible results on hospital workstations where installing heavyweight stacks is challenging.
+Medical segmentation models often require Python expertise and ad hoc preprocessing. Existing GUIs for foundation models (e.g., napari-SAM plug-ins, 3D Slicer SAM extensions, MONAI Label SAM demos) typically operate slice-by-slice, do not maintain geometry-aligned multi-object propagation, or omit integrated volume QA. Conventional tools like ITK-SNAP/MITK offer semi-automatic modes but lack prompt-based propagation across slices and per-object volume reporting. In contrast, this tool couples Medical-SAM2’s video-style API with point/box prompts, multi-object propagation, brush-based refinements, geometry-preserving saves, per-object volume renders, and per-patient preprocessing/method selection in a single workflow. The goal is to lower the barrier for clinical and research teams who need reproducible, geometry-faithful masks without custom coding, while supporting batch navigation over DICOM/NIfTI folders.
 
 # Design and implementation
 
@@ -65,7 +65,7 @@ The codebase is structured as follows: `medsam_gui_v5_multi.py` bootstraps the a
 
 # Availability and installation
 
-The project is hosted on GitHub: https://github.com/SKKU-IBE/SNU_MedSAM2_GUI. A micromamba/conda recipe is provided in `README.md`: create the environment with `python=3.10`, `pyqt=5.15`, `pyopengl`, then install the appropriate PyTorch wheel for your CUDA/CPU target, followed by `pip install -r requirements_medsam2_gui.txt`. The same steps work on Linux and Windows; Linux users should match the PyTorch CUDA build to the installed NVIDIA driver.
+The project is hosted on GitHub: https://github.com/SKKU-IBE/SNU_MedSAM2_GUI. A conda recipe is provided in `README.md`: create the environment with `python>=3.10`, `pyqt=5.15`, `pyopengl`, then install the appropriate PyTorch wheel for your CUDA/CPU target, followed by `pip install -r requirements_medsam2_gui.txt`. The same steps work on Linux and Windows; Linux users should match the PyTorch CUDA build to the installed NVIDIA driver.
 
 # Competing interests
 
