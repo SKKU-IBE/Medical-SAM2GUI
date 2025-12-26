@@ -1,8 +1,10 @@
 ---
-title: "Interactive Medical SAM2 GUI: Napari-based prompting and propagation for medical images"
+title: "Interactive Medical SAM2 GUI: Napari-based semi-automatic annotation for medical images"
 tags:
   - Python
-  - 
+  - Medical-imaging
+  - segmentation
+  - Napari
 authors:
   - name: "Woojae Hong"
     affiliation: 1
@@ -38,49 +40,22 @@ Interactive Medical SAM2 GUI is an open-source, Napari-based application that wr
 
 # Statement of need
 
-Medical segmentation models often require Python expertise and ad hoc preprocessing. Existing GUIs for foundation models (e.g., 3D Slicer SAM extensions [@fedorov2012slicer], MONAI Label SAM demos [@diaz2022monailabel], napari plug-ins) typically operate slice-by-slice, do not maintain geometry-aligned multi-object propagation, or omit integrated volume QA. Conventional tools like ITK-SNAP [@yushkevich2006itksnap] and MITK [@wolf2005mitk] offer semi-automatic modes but lack prompt-based propagation across slices and per-object volume reporting. In contrast, this tool couples Medical-SAM2’s video-style API [@imprintlab_medical_sam2] with point/box prompts, multi-object propagation, brush-based refinements, geometry-preserving saves, per-object volume renders, and per-patient preprocessing/method selection in a single workflow. The goal is to lower the barrier for clinical and research teams who need reproducible, geometry-faithful masks without custom coding, while supporting batch navigation over DICOM/NIfTI folders.
+Medical segmentation models often require Python expertise and ad hoc preprocessing. Existing GUIs for foundation models such as 3D Slicer SAM extensions [@fedorov2012slicer], MONAI Label SAM demos [@diaz2022monailabel], and napari plug-ins allow semi-automatic interaction, but propagation is commonly scoped to limited slice ranges, depends on manual parameter tuning, and rarely tracks object identity or per-object volume through the stack. Conventional tools like ITK-SNAP [@yushkevich2006itksnap] and MITK [@wolf2005mitk] provide region-growing and manual modes yet still place most of the burden on slice-by-slice edits and do not integrate prompt-based propagation with volumetric QA. Clinicians also report friction from repeatedly configuring data paths and preprocessing settings for each study and from switching tools to view 3D renderings or volume metrics. This work couples Medical-SAM2’s video-style API [@imprintlab_medical_sam2] with point/box prompting, multi-object propagation, manual refinements, geometry-preserving saves, per-object volume rendering, and per-patient preprocessing/method selection in a single workflow that can step through datasets after a one-time root path selection. Real-time volume readouts and 3D volume rendering inside the same GUI reduce context switching when annotating tumors or organs while keeping outputs aligned to the original geometry.
 
-# Design and implementation
+# Usage and availability
 
-The GUI is built on Napari for visualization and PyQt5 for controls, exposing Medical-SAM2 inference through a minimal interface. Data loading supports folders of DICOM series and NIfTI volumes; geometry (spacing, origin, direction) is preserved on save. Preprocessing includes bias-field correction (optional for MRI), percentile clipping, and per-slice normalization to 0–255 `uint8` for consistent display and model input. Prompting supports points and boxes with undo/redo history; a manual edit mode leverages Napari painting for label cleanup or full brush-based mask creation when the model output is insufficient. Propagation reuses the Medical-SAM2 video-style API to maintain object identities across slices. Users can browse a directory containing multiple patients (DICOM folders or NIfTI files), process them sequentially, and choose per-patient preprocessing and prompting methods. 3D volume rendering and per-object volume reporting provide quick quality checks. Planned extensions include inserting upstream detection/segmentation models that auto-generate prompts before refinement in the GUI.
+The project is hosted at https://github.com/SKKU-IBE/SNU_MedSAM2_GUI. Installation instructions in the README describe creating a conda environment (python>=3.10, pyqt=5.15, pyopengl) and installing PyTorch matched to the available CUDA/CPU target, followed by `pip install -r requirements_medsam2_gui.txt`. The GUI loads DICOM folders or NIfTI files, walks patients sequentially, lets users choose preprocessing and prompting mode per patient, and then runs Medical-SAM2 to obtain initial masks before manual brush refinements and final saves. Box prompts generally perform best; fitting boxes tightly to objects and placing them on the first and last visible slices triggers automatic propagation through the intervening slices, while multi-object cases benefit from boxes on every slice where each object appears. Point prompts are suited to adding or removing local regions after boxes, and manual brush edits finalize the segmentation. Outputs include geometry-preserving masks in NIfTI format and per-object volume summaries with 3D renderings.
 
-The codebase is structured as follows: `medsam_gui_v5_multi.py` bootstraps the application; `gui/navigation.py` manages patient-level iteration; `gui/manual_gui.py` and `gui/auto_gui.py` implement manual and auto prompting workflows; `medsam_gui_dataloader_v2.py` handles I/O, preprocessing, and geometry-safe saves; `gui/segmentation.py` bridges prompts to the Medical-SAM2 network. Dependencies are intentionally lightweight: PyTorch for inference [@paszke2019pytorch], Napari for visualization [@sofroniew2022napari], and SimpleITK for medical image I/O [@lowekamp2013simpleitk].
+# Implementation
 
-# Functionality
+The application uses Napari for visualization and PyQt5 for controls. Data loading supports DICOM and NIfTI while preserving spacing, origin, and direction on save. Optional preprocessing includes N4 bias-field correction for MRI, percentile clipping, and per-slice normalization to 0–255 `uint8` for consistent display and model input. Prompting supports points and boxes with undo/redo history, and a manual edit mode allows brush-based mask creation or cleanup. Propagation uses the Medical-SAM2 video-style API to maintain object identities across slices, with real-time per-object volume updates and an embedded 3D volume rendering pane to verify shape without exporting. Patient navigation enumerates a root folder of studies, enabling per-patient preprocessing and mode selection after a single path selection. The codebase centers on `medsam_gui_v5_multi.py` (entry), `gui/navigation.py` (patient iteration), `gui/manual_gui.py` and `gui/auto_gui.py` (workflows), `medsam_gui_dataloader_v2.py` (I/O, preprocessing, geometry-safe saves), and `gui/segmentation.py` (bridge to Medical-SAM2). Dependencies include PyTorch [@paszke2019pytorch], Napari [@sofroniew2022napari], and SimpleITK [@lowekamp2013simpleitk].
 
-- **Prompting and propagation:** point and box prompts with per-slice undo/redo; propagation uses Medical-SAM2 to maintain object IDs across frames. Boxes typically yield higher fidelity than points, and users are encouraged to fit boxes tightly around target objects.
-- **Manual refinement:** Napari paint/erase and box editing; manual mode disables box creation callbacks to avoid accidental prompts.
-- **Multi-object handling:** connected-component analysis to initialize IDs; per-object volume computation; 3D volume rendering for visual QA.
-- **Geometry preservation:** masks are saved with original spacing, origin, and direction; supports DICOM series and NIfTI inputs.
-- **Intensity handling:** per-slice percentile clip (0.5/99.5), normalize, scale to 0–255 `uint8`; tensors are cast to `float32` but retain the 0–255 range when entering the model.
-- **Preprocessing for raw MRI:** optional N4 bias field correction plus intensity normalization when raw inputs need harmonization.
-- **Patient navigation:** browse a root folder, iterate through patients in order, and set per-patient preprocess/method choices for convenience.
-
-# Quality control
-
-- Sanity checks for DICOM properties (window center/width, rescale slope/intercept) and geometry warnings.
-- Pre/post preprocess stats (range/mean/std) for reproducibility.
-- Deterministic prompt history with undo/redo and explicit manual-edit toggles.
-- Volume rendering and per-object volume summaries for quick visual validation.
-
-# Availability and installation
-
-The project is hosted on GitHub: https://github.com/SKKU-IBE/SNU_MedSAM2_GUI. A conda recipe is provided in `README.md`: create the environment with `python>=3.10`, `pyqt=5.15`, `pyopengl`, then install the appropriate PyTorch wheel for your CUDA/CPU target, followed by `pip install -r requirements_medsam2_gui.txt`. The same steps work on Linux and Windows; Linux users should match the PyTorch CUDA build to the installed NVIDIA driver.
-
-# Competing interests
+# Conflict of interest
 
 The authors declare no competing interests.
 
-# Funding
-
-This development was supported by the Natiional Research Foundation of Korea (NRF) grant funded by the Korea government (MEST) (No.RS-2025-00517614).
-
-# Reuse potential and impact
-
-The GUI enables non-programmers to harness Medical-SAM2 for interactive segmentation with geometry fidelity. It is suitable for dataset creation, rapid QA of automatic segmentations, and small-batch clinical research where auditability and export fidelity matter. Because it is built on standard Python libraries and ships with permissive licensing, the tool can be adapted for site-specific protocols, alternative backbones, or additional measurement/reporting plugins. Future work will add front-end detection/segmentation modules that auto-propose prompts, followed by the same interactive refinement and brushing workflow described here.
-
 # Acknowledgements
 
-We thank the open-source communities behind PyTorch, Napari, and SimpleITK for making the underlying tooling accessible. Replace the placeholders above with the project contributors and institutional affiliations for submission.
+This development was supported by the National Research Foundation of Korea (NRF) grant funded by the Korea government (MEST) (No.RS-2025-00517614). We thank the open-source communities behind PyTorch, Napari, and SimpleITK for making the underlying tooling accessible.
 
 # References
