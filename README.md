@@ -51,15 +51,15 @@ Planned extension: inserting a detection/segmentation model upfront to auto-gene
 
 Navigation dialogs guide you through dataset selection and per-patient options.
 
-![alt text](image.png)
+![alt text](./images/image.png)
 
 - Main dialog: choose `manual` (user-supplied prompts) or `auto` (future version will accept auto-generated prompts from upstream detection/segmentation models). `Method` is only relevant for `auto`. Enable “Perform preprocessing” for raw MRI (N4 + intensity normalization). Set `Data path` to a folder containing NIfTI files or DICOM series.
 
-![alt text](image-1.png)
+![alt text](./images/image-1.png)
 
 - Patient queue: patients in the data path are processed in order. For each patient you can toggle preprocessing and mode. `Double viewer` lets you view paired series (e.g., T1/T2) together.
 
-![alt text](image-2.png)
+![alt text](./images/image-2.png)
 
 - Workspace: left panel lists layers (image, box/mask layers, user points/boxes); right panel holds prompt and edit controls.
 
