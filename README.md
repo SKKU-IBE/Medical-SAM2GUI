@@ -16,7 +16,7 @@ You can point the GUI at a root folder containing DICOM series or NIfTI files; p
 ## Installation (conda)
 1) Create environment with Qt handled by the solver:
 ```bash
-conda create -y -n medsam -c conda-forge python=3.10 pyqt=5.15.* pyopengl pip
+conda create -y -n medsam -c conda-forge python=3.12 pyqt=5.15.* pyopengl pip
 conda activate medsam
 ```
 
@@ -34,6 +34,9 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ```bash
 pip install -r requirements.txt
 ```
+
+4) Download model weights:
+- Grab `Medical_SAM2_pretrain.pth` from Hugging Face: https://huggingface.co/jiayuanz3/MedSAM2_pretrain/tree/main (place it in the project root or update your path in `cfg.py`).
 
 Windows: identical steps in an Anaconda/Miniconda/Miniforge PowerShell prompt after activating the env. Linux users should ensure the installed NVIDIA driver supports the chosen CUDA runtime (`nvidia-smi`).
 
@@ -114,6 +117,6 @@ PY`
 Until a JOSS DOI is issued, please cite the repository: https://github.com/SKKU-IBE/SNU_MedSAM2_GUI. The Medical-SAM2 model and weights are from https://github.com/ImprintLab/Medical-SAM2; cite their work per their license.
 
 ## License
-Apache License 2.0 (see `LICENSE`).
+GPL-3.0-only (see `LICENSE`).
 
 Model weights: download from https://huggingface.co/jiayuanz3/MedSAM2_pretrain/tree/main (or the upstream https://github.com/ImprintLab/Medical-SAM2) and note their respective licenses.
