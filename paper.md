@@ -28,7 +28,7 @@ affiliations:
     index: 1
   - name: "Pituitary Center, Department of Neurosurgery, Seoul National University Hospital, Seoul National University College of Medicine, Seoul, Republic of Korea"
     index: 2
-date: 2025-12-24
+date: 24 December 2025
 bibliography: paper.bib
 ---
 
