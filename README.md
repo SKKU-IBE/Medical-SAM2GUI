@@ -32,7 +32,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 3) Install project dependencies:
 ```bash
-pip install -r requirements_medsam2_gui.txt
+pip install -r requirements.txt
 ```
 
 Windows: identical steps in an Anaconda/Miniconda/Miniforge PowerShell prompt after activating the env. Linux users should ensure the installed NVIDIA driver supports the chosen CUDA runtime (`nvidia-smi`).
@@ -40,7 +40,7 @@ Windows: identical steps in an Anaconda/Miniconda/Miniforge PowerShell prompt af
 ## Quick start
 ```bash
 conda activate medsam
-python medsam_gui_v5_multi.py
+python medsam_gui.py
 ```
 
 During setup, pick mode (auto/manual), method, and data path. For auto mode, the pipeline builds prompts from detections; for manual mode, you add prompts and propagate.
@@ -104,11 +104,11 @@ Layers (left panel)
 
 ## Tests / Sanity checks
 - Import check (headless): `python - <<'PY'
-import medsam_gui_dataloader_v2, gui.navigation, gui.segmentation
+import dataloader, gui.navigation, gui.segmentation
 print('Imports OK')
 PY`
 - GPU/driver check: `nvidia-smi` (Linux) or NVIDIA-SMI in PowerShell (Windows), then run the PyTorch CUDA snippet in the README install section.
-- GUI smoke test: `python medsam_gui_v5_multi.py`, browse a sample DICOM/NIfTI folder, and ensure images and prompt layers render without errors.
+- GUI smoke test: `python medsam_gui.py`, browse a sample DICOM/NIfTI folder, and ensure images and prompt layers render without errors.
 
 ## How to cite
 Until a JOSS DOI is issued, please cite the repository: https://github.com/SKKU-IBE/SNU_MedSAM2_GUI. The Medical-SAM2 model and weights are from https://github.com/ImprintLab/Medical-SAM2; cite their work per their license.
@@ -116,4 +116,4 @@ Until a JOSS DOI is issued, please cite the repository: https://github.com/SKKU-
 ## License
 Apache License 2.0 (see `LICENSE`).
 
-Model weights: downloaded from https://github.com/ImprintLab/Medical-SAM2 and subject to that project’s license.*** End Patch
+Model weights: download from https://huggingface.co/jiayuanz3/MedSAM2_pretrain/tree/main (or the upstream https://github.com/ImprintLab/Medical-SAM2) and note their respective licenses.

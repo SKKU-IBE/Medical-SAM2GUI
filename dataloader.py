@@ -430,6 +430,9 @@ class SNU3DMRI_MedSAM2Dataset(Dataset):
         # Collect patient paths and names
         self.patient_paths = []
         self.patient_names = []
+
+        def _strip_nii_ext(name: str):
+            return name[:-7] if name.endswith('.nii.gz') else name[:-4] if name.endswith('.nii') else name
         for p in sorted(os.listdir(data_root)):
             full_path = os.path.join(data_root, p)
             if os.path.isdir(full_path):
@@ -439,16 +442,16 @@ class SNU3DMRI_MedSAM2Dataset(Dataset):
                     for nii_file in nii_files:
                         nii_path = os.path.join(full_path, nii_file)
                         self.patient_paths.append(nii_path)
-                        self.patient_names.append(os.path.splitext(nii_file)[0])
+                        self.patient_names.append(_strip_nii_ext(nii_file))
 
                 else:
                     # DICOM series folder
                     self.patient_paths.append(full_path)
                     self.patient_names.append(p)
-            elif p.endswith('_image.nii') or p.endswith('_image.nii.gz'):
+            elif p.endswith('.nii') or p.endswith('.nii.gz'):
                 # Single NIfTI or DICOM file
                 self.patient_paths.append(full_path)
-                self.patient_names.append(os.path.splitext(os.path.basename(p))[0])
+                self.patient_names.append(_strip_nii_ext(os.path.basename(p)))
     
     def update_patient_settings(self, patient_name, settings):
         """Update settings for a specific patient."""

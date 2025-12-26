@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 from PyQt5.QtWidgets import QApplication, QLabel, QHBoxLayout, QPushButton, QMessageBox
 
-from medsam_gui_dataloader_v2 import SNU3DMRI_MedSAM2Dataset, load_dicom_series, load_nii_image
+from dataloader import SNU3DMRI_MedSAM2Dataset, load_dicom_series, load_nii_image
 from gui.segmentation import auto_segmentation
 from gui.auto_gui import MedSAM2NapariGUI
 from gui.manual_gui import ManualPromptNapariGUI
@@ -27,6 +27,9 @@ class PatientNavigationManager:
         self.double_viewers = {}
         self.current_patient_idx = 0
 
+        def _strip_nii_ext(name: str):
+            return name[:-7] if name.endswith('.nii.gz') else name[:-4] if name.endswith('.nii') else name
+
         self.patient_list = []
         for p in sorted(os.listdir(data_root)):
             full_path = os.path.join(data_root, p)
@@ -35,12 +38,12 @@ class PatientNavigationManager:
                 if len(nii_files) > 0:
                     for nii_file in nii_files:
                         nii_path = os.path.join(full_path, nii_file)
-                        patient_name = os.path.splitext(nii_file)[0]
+                        patient_name = _strip_nii_ext(nii_file)
                         self.patient_list.append((nii_path, patient_name))
                 else:
                     self.patient_list.append((full_path, p))
-            elif p.endswith('_image.nii') or p.endswith('_image.nii.gz'):
-                patient_name = os.path.splitext(os.path.basename(p))[0]
+            elif p.endswith('.nii') or p.endswith('.nii.gz'):
+                patient_name = _strip_nii_ext(os.path.basename(p))
                 self.patient_list.append((full_path, patient_name))
         print(f"Found {len(self.patient_list)} patients to process")
 
@@ -56,8 +59,13 @@ class PatientNavigationManager:
             img_size=self.args.image_size if self.args else 1024,
         )
         patient_idx = None
+        def _norm(name):
+            return name[:-7] if name.endswith('.nii.gz') else name[:-4] if name.endswith('.nii') else name
+
+        target_name = _norm(patient_name)
+        target_base = _norm(os.path.basename(patient_path))
         for idx, (path, name) in enumerate(zip(temp_dataset.patient_paths, temp_dataset.patient_names)):
-            if name == patient_name or os.path.basename(path) == os.path.basename(patient_path):
+            if _norm(name) == target_name or _norm(os.path.basename(path)) == target_base:
                 patient_idx = idx
                 break
         if patient_idx is None:
