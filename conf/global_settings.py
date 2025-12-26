@@ -1,7 +1,3 @@
-""" configurations for this project
-
-author Yunli
-"""
 import os
 from datetime import datetime
 

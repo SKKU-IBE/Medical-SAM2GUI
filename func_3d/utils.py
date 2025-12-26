@@ -1,7 +1,3 @@
-"""Utility functions for training and evaluation.
-    Yunli Qi
-"""
-
 import logging
 import os
 import random
