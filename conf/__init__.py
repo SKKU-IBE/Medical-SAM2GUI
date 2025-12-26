@@ -1,7 +1,3 @@
-""" dynamically load settings
-
-author Yunli
-"""
 import conf.global_settings as settings
 
 

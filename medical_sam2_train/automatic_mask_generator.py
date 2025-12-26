@@ -11,9 +11,9 @@ import numpy as np
 import torch
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 
-from sam2_train.modeling.sam2_base import SAM2Base
-from sam2_train.sam2_image_predictor import SAM2ImagePredictor
-from sam2_train.utils.amg import (
+from medical_sam2_train.modeling.sam2_base import SAM2Base
+from medical_sam2_train.sam2_image_predictor import SAM2ImagePredictor
+from medical_sam2_train.utils.amg import (
     area_from_rle,
     batch_iterator,
     batched_mask_to_box,
