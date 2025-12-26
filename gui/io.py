@@ -8,6 +8,27 @@ from PIL import Image
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 
+def _compute_voxel_volume(spacing):
+    """Compute per-voxel physical volume from spacing (fallback to 1)."""
+    if spacing is None or len(spacing) < 3:
+        return 1.0
+    try:
+        vol = float(spacing[0]) * float(spacing[1]) * float(spacing[2])
+        return vol if vol > 0 else 1.0
+    except Exception:
+        return 1.0
+
+
+def _save_volume_report(patient_dir: Path, entries):
+    """Write a simple text report of voxel counts and volumes."""
+    if not entries:
+        return
+    report_path = patient_dir / "volumes.txt"
+    lines = ["object_id\tvoxel_count\tvolume_mm3\n"]
+    lines += [f"{obj_id}\t{vox}\t{vol:.3f}\n" for obj_id, vox, vol in entries]
+    report_path.write_text("".join(lines))
+
+
 def save_masks_auto(gui):
     """Save masks from auto GUI."""
     try:
@@ -75,6 +96,8 @@ def save_masks_auto(gui):
         unique_labels = np.unique(mask_data)
         unique_labels = unique_labels[unique_labels > 0]
         saved_count = 0
+        volume_entries = []
+        voxel_volume = _compute_voxel_volume(spacing)
         for label in unique_labels:
             single_mask = (mask_data == label).astype(np.uint8)
             if single_mask.sum() == 0:
@@ -103,13 +126,18 @@ def save_masks_auto(gui):
 
             single_mask_path = patient_dir / f"{gui.patient_id}_mask_label_{label}.nii.gz"
             sitk.WriteImage(single_mask_sitk, str(single_mask_path))
+            voxels = int(single_mask.sum())
+            volume_entries.append((label, voxels, voxels * voxel_volume))
             saved_count += 1
+
+        _save_volume_report(patient_dir, volume_entries)
 
         success_msg = (
             f"Mask save completed!\n\n"
             f"Save location: {patient_dir}\n"
             f"Total masks: {mask_path.name}\n"
             f"Individual masks: {saved_count} labels\n"
+            f"Volumes: volumes.txt (object_id, voxel_count, volume_mm3)\n"
             f"Geometric information:\n"
             f"  Spacing: {spacing[:3] if len(spacing) >= 3 else spacing}\n"
             f"  Origin: {origin[:3] if len(origin) >= 3 else origin}\n"
@@ -210,6 +238,8 @@ def save_masks_manual(gui):
         unique_labels = np.unique(mask3d_resized)
         unique_labels = unique_labels[unique_labels > 0]
         saved_count = 0
+        volume_entries = []
+        voxel_volume = _compute_voxel_volume(spacing)
         for object_id in unique_labels:
             object_mask = (mask3d_resized == object_id).astype(np.uint8)
             if object_mask.sum() == 0:
@@ -244,13 +274,18 @@ def save_masks_manual(gui):
 
             object_mask_path = patient_dir / f"{patient_name}_mask_objectID_{object_id}.nii.gz"
             sitk.WriteImage(object_mask_sitk, str(object_mask_path))
+            voxels = int(object_mask_original.sum())
+            volume_entries.append((object_id, voxels, voxels * voxel_volume))
             saved_count += 1
+
+        _save_volume_report(patient_dir, volume_entries)
 
         message = (
             f"Masks have been successfully saved!\n"
             f"Save location: {patient_dir}\n"
             f"Full mask: {full_mask_path.name}\n"
-            f"Individual masks for each Object ID: {saved_count} files"
+            f"Individual masks for each Object ID: {saved_count} files\n"
+            f"Volumes: volumes.txt (object_id, voxel_count, volume_mm3)"
         )
         if resize_needed:
             message += f"\nRestored to original size: {full_mask_original.shape}"
