@@ -8,22 +8,8 @@ tags:
 authors:
   - name: "Woojae Hong"
     affiliation: 1
-  - name: "Seong-min Kim"
-    affiliation: 1
-  - name: "Jaewoo Kim"
-    affiliation: 1
-  - name: "Joongyeon Choi"
-    affiliation: 1
-  - name: "Minsung Ko"
-    affiliation: 1
-  - name: "Jiyong Chung"
-    affiliation: 1
   - name: "Hyunggun Kim"
     affiliation: 1
-  - name: "Jong Ha Hwang"
-    affiliation: 2
-  - name: "Yong Hwy Kim"
-    affiliation: 2
 
 affiliations:
   - name: "Department of Biomechatronic Engineering, Sungkyunkwan University, Suwon, Gyeonggi, Republic of Korea"
@@ -38,11 +24,11 @@ bibliography: paper.bib
 
 Interactive Medical SAM2 GUI is an open-source, Napari-based application that wraps the Medical-SAM2 model (https://github.com/ImprintLab/Medical-SAM2) to make interactive segmentation accessible to clinicians and researchers. The tool supports DICOM and NIfTI inputs, allows point and box prompts, propagates masks across slices, enables manual refinements (including brush-based edits), renders multi-object 3D volumes, reports per-object volumes, and exports masks aligned to the original geometry. The application targets researchers and translational teams who need rapid, auditable, and geometry-faithful segmentations without writing code.
 
-![Interactive Medical SAM2 GUI running inside Napari with segmentation overlays and control panel visible.](images/image-2.png){#fig:gui width=80%}
-
 # Statement of need
 
 Medical segmentation models often require Python expertise and ad hoc preprocessing. Existing GUIs for foundation models such as 3D Slicer SAM extensions [@fedorov2012slicer], MONAI Label SAM demos [@diaz2022monailabel], and napari plug-ins allow semi-automatic interaction, but propagation is commonly scoped to limited slice ranges, depends on manual parameter tuning, and rarely tracks object identity or per-object volume through the stack. Conventional tools like ITK-SNAP [@yushkevich2006itksnap] and MITK [@wolf2005mitk] provide region-growing and manual modes yet still place most of the burden on slice-by-slice edits and do not integrate prompt-based propagation with volumetric QA. Clinicians also report friction from repeatedly configuring data paths and preprocessing settings for each study and from switching tools to view 3D renderings or volume metrics. This work couples Medical-SAM2’s video-style API [@imprintlab_medical_sam2] with point/box prompting, multi-object propagation, manual refinements, geometry-preserving saves, per-object volume rendering, and per-patient preprocessing/method selection in a single workflow that can step through datasets after a one-time root path selection. Real-time volume readouts and 3D volume rendering inside the same GUI reduce context switching when annotating tumors or organs while keeping outputs aligned to the original geometry.
+
+![Figure 1. Interactive Medical SAM2 GUI running inside Napari with segmentation overlays and control panel visible.](images/image-2.png){#fig:gui width=80%}
 
 # Usage and availability
 
