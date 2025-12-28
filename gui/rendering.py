@@ -65,12 +65,12 @@ def render_auto_volume(gui):
         resize_factor_y = ori_y / curr_y if curr_y > 0 else 1.0
         resize_factor_z = ori_z / curr_z if curr_z > 0 else 1.0
 
-        spacing_1024 = np.array([spacing_original[2], spacing_original[1], spacing_original[0]])
-        spacing_original_size = np.array([
-            spacing_original[2] * resize_factor_z,
-            spacing_original[1] * resize_factor_y,
+        spacing_current = np.array([
             spacing_original[0] * resize_factor_x,
+            spacing_original[1] * resize_factor_y,
+            spacing_original[2] * resize_factor_z,
         ])
+        spacing_current_zyx = spacing_current[::-1]
 
         unique_ids = np.unique(mask3d)
         unique_ids = unique_ids[unique_ids > 0]
@@ -92,7 +92,7 @@ def render_auto_volume(gui):
             obj_mask_float = obj_mask.astype(float)
             try:
                 verts, faces, normals, values = marching_cubes(
-                    obj_mask_float, level=0.5, spacing=spacing_1024, gradient_direction='descent'
+                    obj_mask_float, level=0.5, spacing=spacing_current_zyx, gradient_direction='descent'
                 )
                 faces_vtk = np.column_stack([np.full(faces.shape[0], 3), faces]).flatten()
                 mesh = pv.PolyData(verts, faces_vtk).clean()
@@ -104,20 +104,16 @@ def render_auto_volume(gui):
 
         print("=== Dual Volume Calculation ===")
         for obj_id in unique_ids:
-            obj_mask = (mask3d == obj_id).astype(np.uint8)
-            voxel_count = obj_mask.sum()
+            obj_mask_resized = (mask3d == obj_id).astype(np.uint8)
+            voxel_count = int(obj_mask_resized.sum())
             if voxel_count == 0:
                 continue
-            voxel_volume_1024 = np.prod(spacing_1024)
-            volume_1024 = voxel_count * voxel_volume_1024
-            voxel_volume_original = np.prod(spacing_original_size)
-            volume_original = voxel_count * voxel_volume_original
+            voxel_volume = float(np.prod(spacing_current))
+            volume = voxel_count * voxel_volume
             volume_results[obj_id] = {
                 'voxel_count': voxel_count,
-                'volume_1024': volume_1024,
-                'volume_original': volume_original,
-                'voxel_size_1024': voxel_volume_1024,
-                'voxel_size_original': voxel_volume_original,
+                'volume': volume,
+                'voxel_size': voxel_volume,
             }
 
         if not all_meshes:
@@ -125,9 +121,9 @@ def render_auto_volume(gui):
             return
 
         z_max, y_max, x_max = mask3d.shape
-        x_size = x_max * spacing_1024[2]
-        y_size = y_max * spacing_1024[1]
-        z_size = z_max * spacing_1024[0]
+        x_size = x_max * spacing_current_zyx[2]
+        y_size = y_max * spacing_current_zyx[1]
+        z_size = z_max * spacing_current_zyx[0]
 
         pl = pv.Plotter(title=f'Pure 3D Volume - {gui.patient_id}')
         grid_spacing = [max(10, x_size/20), max(10, y_size/20), max(10, z_size/20)]
@@ -142,17 +138,12 @@ def render_auto_volume(gui):
                         label=f"Object {mesh_info['obj_id']}")
         pl.add_axes(xlabel='X (mm)', ylabel='Y (mm)', zlabel='Z (mm)')
 
-        volume_lines_1024 = [f"Obj {oid}: {res['volume_1024']:.2f} mm³" for oid, res in volume_results.items()]
-        volume_lines_original = [f"Obj {oid}: {res['volume_original']:.2f} mm³" for oid, res in volume_results.items()]
-        total_1024 = sum(res['volume_1024'] for res in volume_results.values())
-        total_original = sum(res['volume_original'] for res in volume_results.values())
+        volume_lines = [f"Obj {oid}: {res['volume']:.2f} mm³" for oid, res in volume_results.items()]
+        total_volume = sum(res['volume'] for res in volume_results.values())
         volume_text = (
             f"Volume Results:\n\n"
-            f"1024×1024 Resolution:\n{chr(10).join(volume_lines_1024)}\n"
-            f"Total: {total_1024:.2f} mm³\n\n"
-            f"Original Resolution:\n{chr(10).join(volume_lines_original)}\n"
-            f"Total: {total_original:.2f} mm³\n\n"
-            f"Scale Factor: {total_original/total_1024:.3f}"
+            f"Current Resolution (e.g., 1024×1024):\n{chr(10).join(volume_lines)}\n"
+            f"Total: {total_volume:.2f} mm³\n"
         )
         pl.add_text(volume_text, position='upper_right', font_size=9, color='black')
         processing_info = [
@@ -231,12 +222,8 @@ def render_manual_volume(gui):
 
         current_voxel_volume = np.prod(spacing_original) * (resize_factor_x * resize_factor_y * resize_factor_z)
         current_resolution_volume = mask3d.sum() * current_voxel_volume
-        original_voxel_volume = np.prod(spacing_original)
-        original_voxel_count = mask3d.sum() * resize_factor_x * resize_factor_y * resize_factor_z
-        original_resolution_volume = original_voxel_count * original_voxel_volume
 
         print(f"1024x1024 Resolution Volume: {current_resolution_volume:.3f} mm³")
-        print(f"Original Resolution Volume: {original_resolution_volume:.3f} mm³")
 
         spacing_adjusted = np.array([
             spacing_original[0] * resize_factor_x,
@@ -269,7 +256,6 @@ def render_manual_volume(gui):
 
         all_meshes = []
         label_volumes_current = {}
-        label_volumes_original = {}
         for label_id in unique_labels:
             label_mask = (mask3d == label_id).astype(np.uint8)
             if label_mask.sum() == 0:
@@ -286,9 +272,6 @@ def render_manual_volume(gui):
                 all_meshes.append({'mesh': mesh, 'color': napari_color, 'label_id': label_id})
                 label_voxel_count = label_mask.sum()
                 label_volumes_current[label_id] = label_voxel_count * current_voxel_volume
-                label_volumes_original[label_id] = (
-                    label_voxel_count * resize_factor_x * resize_factor_y * resize_factor_z * original_voxel_volume
-                )
             except Exception as e:
                 print(f"  Failed to generate mesh for label {label_id}: {e}")
                 continue
@@ -321,25 +304,22 @@ def render_manual_volume(gui):
         pl.camera_position = 'iso'
 
         total_current_volume = sum(label_volumes_current.values())
-        total_original_volume = sum(label_volumes_original.values())
         grid_info = [
             'Pure 3D Rendering (Label-based, No Interpolation)',
             f'Slices: {curr_z} (minimum 2 required)',
             f'Current Grid: {curr_x} × {curr_y} × {curr_z} voxels',
-            f'Original Grid: {ori_x} × {ori_y} × {ori_z} voxels',
             f'Physical Size: {grid_x_size:.1f} × {grid_y_size:.1f} × {grid_z_size:.1f} mm³',
             f'Slice Thickness: {spacing_adjusted[2]:.3f} mm',
         ]
         volume_info = [
-            f'Label {label_id}: {label_volumes_current[label_id]:.2f} mm³ (Orig: {label_volumes_original[label_id]:.2f} mm³)'
+            f'Label {label_id}: {label_volumes_current[label_id]:.2f} mm³'
             for label_id in sorted(label_volumes_current.keys())
         ]
         pl.add_text('\n'.join(grid_info), position='upper_left', font_size=9, color='black')
         if volume_info:
             pl.add_text('\n'.join(volume_info), position='upper_right', font_size=9, color='darkblue')
         pl.add_text(
-            f'1024×1024 Total: {total_current_volume:.2f} mm³\n'
-            f'Original Res Total: {total_original_volume:.2f} mm³',
+            f'1024×1024 Total: {total_current_volume:.2f} mm³',
             position='lower_right', font_size=11, color='darkred'
         )
         pl.show()
@@ -347,8 +327,6 @@ def render_manual_volume(gui):
         summary_lines = grid_info + [''] + volume_info + [
             '',
             f'Total Volume (1024×1024): {total_current_volume:.2f} mm³',
-            f'Total Volume (Original): {total_original_volume:.2f} mm³',
-            f'Volume Difference: {abs(total_original_volume - total_current_volume):.2f} mm³',
         ]
         QMessageBox.information(gui, 'Pure 3D Volume Rendering Complete', '\n'.join(summary_lines))
 
