@@ -414,15 +414,25 @@ class ManualPromptNapariGUI(QWidget):
             self.user_pts_layer.face_color = colors
         else:
             self.user_pts_layer.data = np.empty((0, 3), dtype=np.float64)
-            self.user_pts_layer.face_color = []
+            # Use zero-length RGBA arrays to avoid napari warnings about empty/illegal colors
+            empty_rgba = np.zeros((0, 4), dtype=float)
+            self.user_pts_layer.face_color = empty_rgba
+            self.user_pts_layer.edge_color = empty_rgba
         shapes = []
         for (t, oid, x1, y1, x2, y2) in self.box_prompts:
             corners = self._create_rectangle_corners(t, x1, y1, x2, y2)
             shapes.append(corners)
         if shapes:
             self.box_layer.data = np.array(shapes, dtype=np.float64)
+            # set colors matching number of boxes to avoid napari color warnings
+            n_shapes = len(shapes)
+            self.box_layer.edge_color = ['red'] * n_shapes
+            self.box_layer.face_color = [[0, 0, 0, 0]] * n_shapes
         else:
             self.box_layer.data = np.empty((0, 4, 3), dtype=np.float64)
+            empty_rgba = np.zeros((0, 4), dtype=float)
+            self.box_layer.edge_color = empty_rgba
+            self.box_layer.face_color = empty_rgba
         self._update_object_id_text()
         self._updating_layers = False
         print(f"Updated layers: {len(self.pos_points)} positive, {len(self.neg_points)} negative points, {len(self.box_prompts)} boxes")
