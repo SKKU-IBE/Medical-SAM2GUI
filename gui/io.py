@@ -239,6 +239,7 @@ def save_masks_manual(gui):
         unique_labels = unique_labels[unique_labels > 0]
         saved_count = 0
         volume_entries = []
+
         voxel_volume = _compute_voxel_volume(spacing)
         for object_id in unique_labels:
             object_mask = (mask3d_resized == object_id).astype(np.uint8)
@@ -274,7 +275,7 @@ def save_masks_manual(gui):
 
             object_mask_path = patient_dir / f"{patient_name}_mask_objectID_{object_id}.nii.gz"
             sitk.WriteImage(object_mask_sitk, str(object_mask_path))
-            voxels = int(object_mask_original.sum())
+            voxels = int(object_mask.sum())
             volume_entries.append((object_id, voxels, voxels * voxel_volume))
             saved_count += 1
 

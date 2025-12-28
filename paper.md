@@ -30,9 +30,11 @@ bibliography: paper.bib
 
 # Summary
 
-Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 2D and 3D medical images (Figure 1c). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder (Figure 1a) and annotate cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files (Figure 1b). During saving, the tool reports per-object volumetry and provides 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden) (Figure 1d).
+Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 2D and 3D medical images (Figure 2a). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder (Figure 1a) and annotate cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files (Figure 1b). During saving, the tool reports per-object volumetry and provides 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden) (Figure 2b).
 
-![Interactive Medical-SAM2 GUI inside Napari.](./images/Figure2.tif){#fig:gui width=85%}
+![Interactive Medical-SAM2 GUI inside Napari.](./images/Figure1.png){#fig:gui width=85%}
+
+![Interactive Medical-SAM2 GUI inside Napari.](./images/Figure2.png)
 
 # Statement of need
 
