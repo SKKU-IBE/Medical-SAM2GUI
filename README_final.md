@@ -8,6 +8,8 @@ This tool is intended for **research annotation workflows** and does not provide
 
 ## Typical workflow (recommended)
 
+![Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask](./images/Single-object, box, point, manual.mp4)
+
 1) Select a **root folder** containing patient DICOM series folders and/or NIfTI files.  
 2) Patients are discovered and processed **sequentially**. For each patient you can proceed or **skip**.  
 3) Use **box prompts** (primary) and optional **point prompts** (refinement) to define objects.  
