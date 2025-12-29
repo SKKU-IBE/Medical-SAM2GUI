@@ -1,5 +1,5 @@
 ---
-title: "Interactive Medical SAM2 GUI: Napari-based semi-automatic annotation for medical images"
+title: "Interactive Medical-SAM2 GUI: A Napari-based semi-automatic annotation tool for medical images"
 tags:
   - Python
   - Medical-imaging

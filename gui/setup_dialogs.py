@@ -23,11 +23,11 @@ from PyQt5.QtWidgets import (
 
 
 class InitialSetupDialog(QDialog):
-    """Initial setup dialog for Medical SAM2 GUI."""
+    """Initial setup dialog for Medical-SAM2 GUI."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Interactive Medical SAM2 - Initial Setup")
+        self.setWindowTitle("Interactive Medical-SAM2 - Initial Setup")
         self.setModal(True)
         self.resize(500, 400)
 
@@ -43,7 +43,7 @@ class InitialSetupDialog(QDialog):
     def setup_ui(self):
         main_layout = QVBoxLayout()
 
-        title_label = QLabel("Interactive Medical SAM2 GUI Setup")
+        title_label = QLabel("Interactive Medical-SAM2 GUI Setup")
         title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin: 10px;")
         main_layout.addWidget(title_label)
 

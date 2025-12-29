@@ -54,7 +54,7 @@ Planned extension: inserting a detection/segmentation model upfront to auto-gene
 
 Navigation dialogs guide you through dataset selection and per-patient options.
 
-![alt text](./images/image.png)
+![alt text](./images/image-0.png)
 
 - Main dialog: choose `manual` (user-supplied prompts) or `auto` (future version will accept auto-generated prompts from upstream detection/segmentation models). `Method` is only relevant for `auto`. Enable “Perform preprocessing” for raw MRI (N4 + intensity normalization). Set `Data path` to a folder containing NIfTI files or DICOM series.
 

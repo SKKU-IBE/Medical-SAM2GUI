@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 from PyQt5.QtWidgets import QApplication, QLabel, QHBoxLayout, QPushButton, QMessageBox
 
-from dataloader import SNU3DMRI_MedSAM2Dataset, load_dicom_series, load_nii_image
+from dataloader import SNU3DMRI_MedSAM2Dataset, load_dicom_series, load_nii_image, discover_studies
 from gui.segmentation import auto_segmentation
 from gui.auto_gui import MedSAM2NapariGUI
 from gui.manual_gui import ManualPromptNapariGUI
@@ -26,25 +26,7 @@ class PatientNavigationManager:
         self.user_inputs = {}
         self.double_viewers = {}
         self.current_patient_idx = 0
-
-        def _strip_nii_ext(name: str):
-            return name[:-7] if name.endswith('.nii.gz') else name[:-4] if name.endswith('.nii') else name
-
-        self.patient_list = []
-        for p in sorted(os.listdir(data_root)):
-            full_path = os.path.join(data_root, p)
-            if os.path.isdir(full_path):
-                nii_files = [f for f in os.listdir(full_path) if f.endswith('.nii') or f.endswith('.nii.gz')]
-                if len(nii_files) > 0:
-                    for nii_file in nii_files:
-                        nii_path = os.path.join(full_path, nii_file)
-                        patient_name = _strip_nii_ext(nii_file)
-                        self.patient_list.append((nii_path, patient_name))
-                else:
-                    self.patient_list.append((full_path, p))
-            elif p.endswith('.nii') or p.endswith('.nii.gz'):
-                patient_name = _strip_nii_ext(os.path.basename(p))
-                self.patient_list.append((full_path, patient_name))
+        self.patient_list = discover_studies(data_root)
         print(f"Found {len(self.patient_list)} patients to process")
 
     def load_patient_data(self, patient_path, patient_name, mode, method, preprocess):

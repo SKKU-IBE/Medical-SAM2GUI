@@ -7,6 +7,41 @@ from PIL import Image
 import cv2
 from scipy.optimize import linear_sum_assignment
 
+
+def _strip_nii_ext(name: str):
+    name = os.path.basename(name)
+    return name[:-7] if name.lower().endswith('.nii.gz') else name[:-4] if name.lower().endswith('.nii') else name
+
+
+def discover_studies(data_root, exclude_dirs=('preprocessed',)):
+    """Discover NIfTI files and DICOM series directories under a root path."""
+    studies = []
+
+    if os.path.isfile(data_root):
+        lower = data_root.lower()
+        if lower.endswith('.nii') or lower.endswith('.nii.gz'):
+            studies.append((data_root, _strip_nii_ext(data_root)))
+            return studies
+        if lower.endswith('.dcm'):
+            parent = os.path.dirname(data_root)
+            studies.append((parent, os.path.basename(parent)))
+            return studies
+
+    for root, dirs, files in os.walk(data_root):
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+
+        for fname in sorted(files):
+            lower = fname.lower()
+            if lower.endswith('.nii') or lower.endswith('.nii.gz'):
+                fpath = os.path.join(root, fname)
+                studies.append((fpath, _strip_nii_ext(fname)))
+
+        if any(f.lower().endswith('.dcm') for f in files):
+            studies.append((root, os.path.basename(root)))
+
+    studies.sort(key=lambda x: x[0])
+    return studies
+
 def n4_correction(image_sitk):
     # Convert to 32-bit float to avoid pixel type issues
     image_sitk = sitk.Cast(image_sitk, sitk.sitkFloat32)
@@ -431,27 +466,9 @@ class SNU3DMRI_MedSAM2Dataset(Dataset):
         self.patient_paths = []
         self.patient_names = []
 
-        def _strip_nii_ext(name: str):
-            return name[:-7] if name.endswith('.nii.gz') else name[:-4] if name.endswith('.nii') else name
-        for p in sorted(os.listdir(data_root)):
-            full_path = os.path.join(data_root, p)
-            if os.path.isdir(full_path):
-                # Assume DICOM series or NIfTI folder
-                nii_files = [f for f in os.listdir(full_path) if f.endswith('.nii') or f.endswith('.nii.gz')]
-                if len(nii_files) > 0:
-                    for nii_file in nii_files:
-                        nii_path = os.path.join(full_path, nii_file)
-                        self.patient_paths.append(nii_path)
-                        self.patient_names.append(_strip_nii_ext(nii_file))
-
-                else:
-                    # DICOM series folder
-                    self.patient_paths.append(full_path)
-                    self.patient_names.append(p)
-            elif p.endswith('.nii') or p.endswith('.nii.gz'):
-                # Single NIfTI or DICOM file
-                self.patient_paths.append(full_path)
-                self.patient_names.append(_strip_nii_ext(os.path.basename(p)))
+        for path, name in discover_studies(data_root):
+            self.patient_paths.append(path)
+            self.patient_names.append(name)
     
     def update_patient_settings(self, patient_name, settings):
         """Update settings for a specific patient."""

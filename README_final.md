@@ -89,7 +89,7 @@ If an **auto mode** is present in your build, it is intended to accept automatic
 
 Navigation dialogs guide you through dataset selection and per-patient options.
 
-![alt text](./images/image.png)
+![alt text](./images/image-0.png)
 
 - Main dialog:
   - choose `manual` (user-supplied prompts).
@@ -109,6 +109,7 @@ Navigation dialogs guide you through dataset selection and per-patient options.
 - Workspace:
   - left panel lists layers (image, prompt/mask layers, user points/boxes).
   - right panel holds prompt, propagation, editing, and export controls.
+  - layer selection matters: add boxes from the `mask, box layer`; add points from the `image, point layer`; edit boxes/points only from their respective `User Boxes correction layer` and `User Points correction layer`.
 
 ---
 
@@ -119,6 +120,7 @@ Navigation dialogs guide you through dataset selection and per-patient options.
 To create a box prompt:
 1) click the **top-left** corner  
 2) then click the **bottom-right** corner  
+Use the `mask, box layer` when adding boxes; edits belong in the `User Boxes correction layer`.
 
 For best results, draw the box **as tightly as possible** around the object (minimize empty background).
 
@@ -147,12 +149,14 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 
 - place **positive / negative** clicks on the visible slice.
 - in the current workflow, point prompts are intended to be used **together with** a box prompt for that object on the same slice (box defines the object region; points provide additional guidance).
+- use the `image, point layer` when adding points; edits belong in the `User Points correction layer`.
 
 ### Controls (GUI)
 
 - `Add Box`: click top-left then bottom-right to place a box prompt (works on box/mask layers).
 - `Add + / - Point`: place positive/negative clicks on the visible slice.
 - `Propagate`: run Medical-SAM2 propagation using the prompted slice range.
+- Layer rule of thumb: add boxes on `mask, box layer`; add points on `image, point layer`; edit boxes/points only in their correction layers; manual painting/erasing happens on `mask, image layer` with `Manual Edit` enabled.
 
 ---
 
@@ -161,7 +165,7 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 - Manual edit mode: brush/erase labels, adjust brush size, change object ID colors, and tweak mask opacity.
 - `Edit Points`: toggle editability of user point layer to move/delete points.
 - `Edit Boxes`: toggle editability of user box layer; rectangles keep shape during edits.
-- `Manual Edit`: enable/disable napari painting/rectangle drawing.
+- `Manual Edit`: enable/disable napari painting/rectangle drawing; enable this before making manual changes to avoid edit issues.
 - `Clear All`: remove prompts/masks and reset history.
 - `Hide/Show Object IDs`: toggle object ID overlays.
 - `Undo`/`Redo`: prompt history management.
