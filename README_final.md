@@ -8,13 +8,19 @@ This tool is intended for **research annotation workflows** and does not provide
 
 ## Typical workflow (recommended)
 
-![Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask](./images/Single-object, box, point, manual.mp4)
+![Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask](./images/video1.webm)
 
 1) Select a **root folder** containing patient DICOM series folders and/or NIfTI files.  
 2) Patients are discovered and processed **sequentially**. For each patient you can proceed or **skip**.  
 3) Use **box prompts** (primary) and optional **point prompts** (refinement) to define objects.  
+
+![Single object - only box prompt](./images/video2.webm)
+
 4) Run **propagation** (Medical-SAM2) to obtain masks across the target slice range.  
 5) Inspect results. If needed, adjust prompts and propagate again.  
+
+![Single object - box and point prompt and manual correction](./images/video3.webm)
+
 6) When the result is satisfactory, perform **final manual correction** (brush/erase) and then **save**.  
 7) On save, the GUI computes **per-object volumetry** and supports **3D volume rendering** for shape inspection.
 
