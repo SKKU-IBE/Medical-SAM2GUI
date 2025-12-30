@@ -9,8 +9,7 @@ This tool is intended for **research annotation workflows** and does not provide
 ## Typical workflow (recommended)
 
 
-![alt video](video1.webm)
-<video controls src="video1.webm" title="Interative Medical SAM2 GUI"></video>
+![alt video](./videos/video1.mp4)
 Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask
 
 1) Select a **root folder** containing patient DICOM series folders and/or NIfTI files.  
@@ -122,6 +121,8 @@ Navigation dialogs guide you through dataset selection and per-patient options.
 
 ### Box creation (how to draw a box)
 
+![alt text](./images/image-4.png)
+
 To create a box prompt:
 1) click the **top-left** corner  
 2) then click the **bottom-right** corner  
@@ -131,8 +132,7 @@ For best results, draw the box **as tightly as possible** around the object (min
 
 ### Single-object workflow (fast path)
 
-<video controls src="video2.webm" title="Single-object box prompt-based workflow"></video>
-
+![alt video](./videos/video2.mp4)
 
 For a single target object in a 3D volume:
 
@@ -153,7 +153,9 @@ For multiple objects:
 
 ### Point prompts (secondary / refinement)
 
-<video controls src="video3.webm" title="Point prompts and manual correction"></video>
+![alt video](./videos/video3.mp4)
+
+![alt text](./images/image-5.png)
 
 Point prompts are used to refine a prediction on a slice (small additions/corrections):
 
@@ -194,6 +196,8 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 ---
 
 ## 3D visualization and volumetry
+
+![alt text](./images/image-3.png)
 
 - `3D Volume Render`: PyVista view to inspect object location and morphology.
 - per-object volumes are computed from:
