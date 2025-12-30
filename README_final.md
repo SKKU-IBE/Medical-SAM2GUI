@@ -9,7 +9,7 @@ This tool is intended for **research annotation workflows** and does not provide
 ## Typical workflow (recommended)
 
 
-![alt video](vidieo1.webm)
+![alt video](video1.webm)
 <video controls src="video1.webm" title="Interative Medical SAM2 GUI"></video>
 Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask
 
