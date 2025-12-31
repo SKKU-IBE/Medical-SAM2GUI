@@ -9,7 +9,7 @@ This tool is intended for **research annotation workflows** and does not provide
 ## Typical workflow (recommended)
 
 
-![alt video](./videos/video1.mp4)
+![alt video](./videos/1.gif)
 Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask
 
 1) Select a **root folder** containing patient DICOM series folders and/or NIfTI files.  
@@ -132,7 +132,7 @@ For best results, draw the box **as tightly as possible** around the object (min
 
 ### Single-object workflow (fast path)
 
-![alt video](./videos/video2.mp4)
+![alt video](./videos/2.gif)
 
 For a single target object in a 3D volume:
 
@@ -153,7 +153,7 @@ For multiple objects:
 
 ### Point prompts (secondary / refinement)
 
-![alt video](./videos/video3.mp4)
+![alt video](./videos/3.gif)
 
 ![alt text](./images/image-5.png)
 
@@ -162,6 +162,8 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 - place **positive / negative** clicks on the visible slice.
 - in the current workflow, point prompts are intended to be used **together with** a box prompt for that object on the same slice (box defines the object region; points provide additional guidance).
 - use the `image, point layer` when adding points; edits belong in the `User Points correction layer`.
+
+![alt video](./videos/5.gif)
 
 ### Controls (GUI)
 
@@ -173,6 +175,10 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 ---
 
 ## Editing and QA (final correction)
+
+![alt video](./videos/4.gif)
+
+![alt video](./videos/6.gif)
 
 - Manual edit mode: brush/erase labels, adjust brush size, change object ID colors, and tweak mask opacity.
 - `Edit Points`: toggle editability of user point layer to move/delete points.
