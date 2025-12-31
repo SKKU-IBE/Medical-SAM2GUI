@@ -1,4 +1,4 @@
-# Interactive Medical SAM2 GUI (SNU_MedSAM2_GUI)
+# Interactive Medical SAM2 GUI
 
 Napari-based GUI that wraps **Medical-SAM2** for **clinical-style, cohort-scale** annotation workflows: load **DICOM** or **NIfTI**, prompt mainly with **boxes** (and optionally points), **propagate** masks across slices, perform **final manual correction**, render **multi-object 3D volumes**, measure **per-object volumes**, and save masks **aligned to the source geometry** (spacing/origin/direction).
 
