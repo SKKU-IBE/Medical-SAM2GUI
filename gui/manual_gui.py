@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import napari
+import time
 from collections import deque, defaultdict
 from PyQt5.QtWidgets import (
     QWidget,
@@ -10,7 +11,10 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QPushButton,
     QMessageBox,
+    QShortcut,
 )
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import Qt
 import threading
 from PIL import Image
 
@@ -20,7 +24,7 @@ from gui.io import save_masks_manual
 
 class ManualPromptNapariGUI(QWidget):
     """Napari GUI for manual prompt input (points/boxes) with propagate."""
-    def __init__(self, imgs, net, device, patient_id, meta):
+    def __init__(self, imgs, net, device, patient_id, meta, metrics=None):
         super().__init__()
         if imgs.dim() == 5 and imgs.size(0) == 1:
             imgs = imgs.squeeze(0)
@@ -29,6 +33,11 @@ class ManualPromptNapariGUI(QWidget):
         self.device = device
         self.patient_id = patient_id
         self.meta = meta
+        self.metrics = metrics
+        self.session_started_at = time.time()
+        self.first_prompt_ts = None
+        self.manual_edit_started_at = None
+        self.manual_edit_total_sec = 0.0
 
         self.n_frames = imgs.shape[0]
         self.frame_idx = 0
@@ -53,11 +62,28 @@ class ManualPromptNapariGUI(QWidget):
         self.user_pts_layer = self.viewer.add_points(
             np.empty((0,3)), name='User Points correction layer', size=5
         )
+        # Initialize empty RGBA to avoid napari illegal color warnings
+        empty_rgba = np.zeros((0, 4), dtype=float)
+        try:
+            self.user_pts_layer.face_color = empty_rgba
+            self.user_pts_layer.edge_color = empty_rgba
+        except Exception:
+            pass
         self.box_layer = self.viewer.add_shapes(
             np.empty((0,4,3)), name='User Boxes correction layer', shape_type='rectangle',
             edge_color='red', face_color=[0,0,0,0]
         )
+        self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))
+        self._attach_mode_guard(self.box_layer, allowed_modes=('select', 'pan_zoom'))
         self.manual_edit_enabled = False  # allow napari painting/box drawing when toggled
+        self.active_tool = None  # track current prompt/edit tool for toggling
+        # Button references for visual states
+        self.btn_add_pos = None
+        self.btn_add_neg = None
+        self.btn_add_box = None
+        self.manual_edit_button = None
+        self.btn_edit_points = None
+        self.btn_edit_boxes = None
 
         self.show_object_ids = True
         try:
@@ -75,6 +101,11 @@ class ManualPromptNapariGUI(QWidget):
         self._setup_viewer_callbacks()
         self._setup_layer_callbacks()
         self.update_layers()
+        self._bind_shortcuts()
+        self._bind_qshortcuts()
+        if self.metrics and self.metrics.is_active():
+            self.metrics.add_event('manual_gui_initialized', n_frames=self.n_frames, patient_id=str(self.patient_id))
+            self.metrics.set_info('n_frames', int(self.n_frames))
 
     def _get_patient_display_name(self):
         if isinstance(self.patient_id, (list, tuple)):
@@ -101,6 +132,118 @@ class ManualPromptNapariGUI(QWidget):
                 return
             self._sync_points_from_layer()
         self._setup_manual_box_editing_events()
+
+        @self.mask_layer.events.data.connect
+        def on_mask_data_change(event=None):
+            if not getattr(self, 'manual_edit_enabled', False):
+                return
+            if getattr(self, '_updating_layers', False):
+                return
+            if self.metrics and self.metrics.is_active():
+                self.metrics.inc_counter('manual_edit_strokes', 1)
+                self.metrics.add_event('manual_edit_stroke', frame=int(self.frame_idx))
+
+    def _select_layer(self, layer):
+        try:
+            # ensure napari marks this as the sole active layer
+            try:
+                self.viewer.layers.selection.select_only(layer)
+            except Exception:
+                self.viewer.layers.selection = [layer]
+                self.viewer.layers.selection.active = layer
+            self._focus_viewer_canvas()
+        except Exception:
+            pass
+
+    def _focus_viewer_canvas(self):
+        try:
+            if hasattr(self.viewer, 'window') and hasattr(self.viewer.window, 'qt_viewer'):
+                canvas = getattr(self.viewer.window.qt_viewer, 'canvas', None)
+                if canvas and hasattr(canvas, 'native'):  # napari uses vispy canvas
+                    canvas.native.setFocus()
+        except Exception:
+            pass
+
+    def _bind_shortcuts(self):
+        keymap = [
+            ('h', self.enable_add_positive),
+            ('j', self.enable_add_negative),
+            ('q', self.toggle_manual_annotation),
+            ('k', self.enable_edit_points),
+            ('c', self.clear_all_prompts),
+            ('y', lambda: self._set_mask_opacity(0.0)),
+            ('o', lambda: self._set_mask_opacity(1.0)),
+            ('u', lambda: self._bump_mask_opacity(-0.1)),
+            ('i', lambda: self._bump_mask_opacity(0.1)),
+        ]
+        for key, handler in keymap:
+            # overwrite=True to beat any napari default bindings (e.g., zoom)
+            self.viewer.bind_key(key, lambda v, h=handler: h(), overwrite=True)
+        self.viewer.bind_key('s', lambda v: self.save_masks(), overwrite=True)
+        self.viewer.bind_key('Control-Z', lambda v: self.prompt_undo(), overwrite=True)
+        self.viewer.bind_key('Control-Y', lambda v: self.prompt_redo(), overwrite=True)
+        self.viewer.bind_key('Control-S', lambda v: self.save_masks(), overwrite=True)
+        self.viewer.bind_key('Ctrl+Z', lambda v: self.prompt_undo(), overwrite=True)
+        self.viewer.bind_key('Ctrl+Y', lambda v: self.prompt_redo(), overwrite=True)
+        self.viewer.bind_key('Ctrl+S', lambda v: self.save_masks(), overwrite=True)
+        if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
+            self.viewer.bind_key('n', lambda v: self.next_patient(), overwrite=True)
+
+    def _bind_qshortcuts(self):
+        # Qt-level shortcuts to ensure undo/redo work even when dock widget has focus
+        self._qt_shortcuts = []
+        for seq, handler in [
+            ('Ctrl+Z', self.prompt_undo),
+            ('Ctrl+Y', self.prompt_redo),
+            ('Ctrl+S', self.save_masks),
+            ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
+        ]:
+            if handler:
+                sc = QShortcut(QKeySequence(seq), self)
+                sc.setContext(Qt.ApplicationShortcut)
+                sc.activated.connect(handler)
+                self._qt_shortcuts.append(sc)
+
+    def _attach_mode_guard(self, layer, allowed_modes=('select',)):
+        def _on_mode_change(event=None):
+            try:
+                if layer.mode not in allowed_modes:
+                    layer.mode = allowed_modes[0]
+            except Exception:
+                pass
+        try:
+            layer.events.mode.connect(_on_mode_change)
+        except Exception:
+            pass
+
+    def _set_button_active(self, btn, active):
+        if not btn:
+            return
+        if active:
+            btn.setStyleSheet('background-color: lightgreen; font-weight: bold;')
+        else:
+            btn.setStyleSheet('')
+
+    def _reset_prompt_buttons(self):
+        for b in (self.btn_add_pos, self.btn_add_neg, self.btn_add_box):
+            self._set_button_active(b, False)
+        self._set_button_active(self.btn_edit_points, False)
+        self._set_button_active(self.btn_edit_boxes, False)
+
+    def _set_mask_opacity(self, value):
+        try:
+            self.mask_layer.opacity = float(np.clip(value, 0.0, 1.0))
+            self.viewer.status = f"Mask opacity: {self.mask_layer.opacity:.2f}"
+        except Exception:
+            pass
+
+    def _bump_mask_opacity(self, delta):
+        try:
+            new_opacity = float(np.clip(self.mask_layer.opacity + delta, 0.0, 1.0))
+            self.mask_layer.opacity = new_opacity
+            self.viewer.status = f"Mask opacity: {new_opacity:.2f}"
+        except Exception:
+            pass
 
     def _setup_manual_box_editing_events(self):
         self._box_edit_timer = None
@@ -228,6 +371,15 @@ class ManualPromptNapariGUI(QWidget):
             [frame, y2, x1]
         ], dtype=np.float64)
 
+    def _record_prompt_event(self, kind, frame_idx, obj_id):
+        if not self.metrics or not self.metrics.is_active():
+            return
+        self.metrics.inc_counter(f'{kind}_count', 1)
+        self.metrics.add_event('prompt_added', kind=kind, frame=int(frame_idx), obj_id=int(obj_id))
+        if self.first_prompt_ts is None:
+            self.first_prompt_ts = time.time()
+            self.metrics.set_info('time_to_first_prompt_sec', round(self.first_prompt_ts - self.session_started_at, 3))
+
     def _build_controls(self):
         layout = QVBoxLayout()
         current_frame_hl = QHBoxLayout()
@@ -251,27 +403,26 @@ class ManualPromptNapariGUI(QWidget):
         self.oid_spin.valueChanged.connect(self.on_obj_change)
         oid_hl.addWidget(self.oid_spin)
         layout.addLayout(oid_hl)
-        self.manual_edit_button = None
         btns = [
-            ('Add + Point', self.enable_add_positive),
-            ('Add - Point', self.enable_add_negative),
-            ('Add Box',     self.enable_add_box),
-            ('Manual Edit', self.toggle_manual_annotation),
-            ('Edit Points', self.enable_edit_points),
-            ('Edit Boxes',  self.enable_edit_boxes),
-            ('Clear All',   self.clear_all_prompts),
-            ('Propagate',   self.propagate_prompt),
-            ('3D Volume Render', lambda: render_manual_volume(self)),
-            ('Undo',        self.prompt_undo),
-            ('Redo',        self.prompt_redo),
-            ('Save Masks',  lambda: save_masks_manual(self))
+            ('Add + Point', self.enable_add_positive, 'btn_add_pos'),
+            ('Add - Point', self.enable_add_negative, 'btn_add_neg'),
+            ('Add Box',     self.enable_add_box, 'btn_add_box'),
+            ('Manual Edit', self.toggle_manual_annotation, 'manual_edit_button'),
+            ('Edit Points', self.enable_edit_points, 'btn_edit_points'),
+            ('Edit Boxes',  self.enable_edit_boxes, 'btn_edit_boxes'),
+            ('Clear All',   self.clear_all_prompts, None),
+            ('Propagate',   self.propagate_prompt, None),
+            ('3D Volume Render', lambda: render_manual_volume(self), None),
+            ('Undo',        self.prompt_undo, None),
+            ('Redo',        self.prompt_redo, None),
+            ('Save Masks',  lambda: save_masks_manual(self), None)
         ]
-        for label, func in btns:
+        for label, func, attr in btns:
             b = QPushButton(label)
-            if label == 'Manual Edit':
-                self.manual_edit_button = b
             b.clicked.connect(func)
             layout.addWidget(b)
+            if attr:
+                setattr(self, attr, b)
         self.toggle_id_btn = QPushButton("Hide Object IDs" if self.show_object_ids else "Show Object IDs")
         self.toggle_id_btn.clicked.connect(self.toggle_object_id_visibility)
         self.toggle_id_btn.setStyleSheet("background-color: lightgreen; font-weight: bold;")
@@ -287,6 +438,8 @@ class ManualPromptNapariGUI(QWidget):
         self.mask_layer.data = np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8)
         self.update_layers()
         print("All prompts and masks cleared")
+        if self.metrics and self.metrics.is_active():
+            self.metrics.add_event('prompts_cleared')
 
     def on_frame_change(self, val):
         self.frame_idx = val
@@ -303,13 +456,37 @@ class ManualPromptNapariGUI(QWidget):
     def cancel_prompt_mode(self, viewer=None):
         self.img_layer.mouse_drag_callbacks.clear()
         self.mask_layer.mouse_drag_callbacks.clear()
+        if self.active_tool == 'edit_pts':
+            self.user_pts_layer.editable = False
+        if self.active_tool == 'edit_boxes':
+            self.box_layer.editable = False
         if not self.manual_edit_enabled:
             self.user_pts_layer.editable = False
             self.box_layer.editable = False
             self.mask_layer.editable = False
+        self._reset_prompt_buttons()
+        self.active_tool = None
+
+    def _activate_tool(self, name):
+        # Toggle off if the same tool is already active
+        if self.manual_edit_enabled and name != 'manual_edit':
+            print("Manual Edit 활성화 중에는 다른 도구를 사용할 수 없습니다. Manual Edit을 끄세요.")
+            return False
+        if self.active_tool == name:
+            self.cancel_prompt_mode()
+            return False
+        self.cancel_prompt_mode()
+        self.active_tool = name
+        return True
 
     def enable_add_positive(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 점 추가를 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('add_pos'):
+            return
+        self._select_layer(self.img_layer)
+        self._set_button_active(self.btn_add_pos, True)
         self.add_mode = 'pos'
         def cb(layer, event):
             if event.type != 'mouse_press': return
@@ -319,11 +496,18 @@ class ManualPromptNapariGUI(QWidget):
             self.prompt_history.append(('pos', t, self.current_obj_id, y, x))
             self.redo_history.clear()
             self.update_layers()
+            self._record_prompt_event('pos_point', t, self.current_obj_id)
             print(f"Added positive point at frame {t}, position ({x}, {y}) - should be GREEN")
         self.img_layer.mouse_drag_callbacks.append(cb)
 
     def enable_add_negative(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 점 추가를 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('add_neg'):
+            return
+        self._select_layer(self.img_layer)
+        self._set_button_active(self.btn_add_neg, True)
         self.add_mode = 'neg'
         def cb(layer, event):
             if event.type != 'mouse_press': return
@@ -333,11 +517,19 @@ class ManualPromptNapariGUI(QWidget):
             self.prompt_history.append(('neg', t, self.current_obj_id, y, x))
             self.redo_history.clear()
             self.update_layers()
+            self._record_prompt_event('neg_point', t, self.current_obj_id)
             print(f"Added negative point at frame {t}, position ({x}, {y}) - should be RED")
         self.img_layer.mouse_drag_callbacks.append(cb)
 
     def enable_add_box(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 박스 추가를 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('add_box'):
+            return
+        self._select_layer(self.mask_layer)
+        self.mask_layer.editable = True  # ensure drag callbacks fire on labels layer
+        self._set_button_active(self.btn_add_box, True)
         self.add_mode = 'box'
         pts = []
         def cb(layer, event):
@@ -352,6 +544,7 @@ class ManualPromptNapariGUI(QWidget):
                 self.prompt_history.append(('box', t, self.current_obj_id, x1, y1, x2, y2))
                 self.redo_history.clear()
                 self.update_layers()
+                self._record_prompt_event('box', t, self.current_obj_id)
                 print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
                 pts.clear()
         self.mask_layer.mouse_drag_callbacks.append(cb)
@@ -361,44 +554,96 @@ class ManualPromptNapariGUI(QWidget):
         self.img_layer.mouse_drag_callbacks.clear()
         self.mask_layer.mouse_drag_callbacks.clear()
         self.add_mode = None
+        self._reset_prompt_buttons()
+        self.active_tool = None
         self.manual_edit_enabled = not self.manual_edit_enabled
         if self.manual_edit_enabled:
             self.mask_layer.editable = True
             self.mask_layer.selected_label = self.current_obj_id
             self.box_layer.editable = True
             self.box_layer.mode = 'add_rectangle'
-            if self.manual_edit_button:
-                self.manual_edit_button.setText('Manual Edit (ON)')
-                self.manual_edit_button.setStyleSheet('background-color: lightgreen; font-weight: bold;')
+            self._select_layer(self.mask_layer)
+            self._set_button_active(self.manual_edit_button, True)
             self.viewer.status = "Manual Edit ON"
             print("Manual annotation enabled: paint on 'mask, box layer' or draw rectangles in 'User Boxes correction layer'.")
+            if self.metrics and self.metrics.is_active():
+                self.manual_edit_started_at = time.time()
         else:
             self.mask_layer.editable = False
             self.box_layer.editable = False
-            if self.manual_edit_button:
-                self.manual_edit_button.setText('Manual Edit')
-                self.manual_edit_button.setStyleSheet('')
+            self._set_button_active(self.manual_edit_button, False)
             self.viewer.status = "Manual Edit OFF"
             print("Manual annotation disabled.")
+            if self.metrics and self.metrics.is_active() and self.manual_edit_started_at:
+                interval = time.time() - self.manual_edit_started_at
+                self.manual_edit_total_sec += interval
+                self.metrics.record_stage('manual_edit_interval', self.manual_edit_started_at, time.time(), duration_sec=round(interval, 4))
+                self.manual_edit_started_at = None
+        if self.metrics and self.metrics.is_active():
+            self.metrics.inc_counter('manual_edit_toggles', 1)
+            self.metrics.add_event('manual_edit_toggled', enabled=self.manual_edit_enabled)
+
+    def ensure_manual_edit_on(self):
+        """Force-enable manual edit and focus the mask/box layer, regardless of current layer."""
+        self._select_layer(self.mask_layer)
+        if not self.manual_edit_enabled:
+            self.toggle_manual_annotation()
+        else:
+            # Refresh selection/mode even when already on
+            try:
+                self.mask_layer.editable = True
+                self.mask_layer.mode = 'paint'
+                self.mask_layer.selected_label = self.current_obj_id
+            except Exception:
+                pass
 
     def enable_edit_points(self):
-        self.cancel_prompt_mode()
-        was_editable = self.user_pts_layer.editable
-        self.user_pts_layer.editable = not was_editable
-        if self.user_pts_layer.editable:
-            print("Points editing enabled - you can move/delete points")
-        else:
-            print("Points editing disabled")
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 포인트 편집을 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('edit_pts'):
+            # toggled off
+            self.user_pts_layer.editable = False
+            try:
+                self.user_pts_layer.mode = 'pan_zoom'
+            except Exception:
+                pass
+            return
+        self.user_pts_layer.editable = True
+        self._select_layer(self.user_pts_layer)
+        try:
+            self.user_pts_layer.mode = 'select'
+        except Exception:
+            pass
+        self._set_button_active(self.btn_edit_points, True)
+        print("Points editing enabled - you can move/delete points")
 
     def enable_edit_boxes(self):
-        self.cancel_prompt_mode()
-        was_editable = self.box_layer.editable
-        self.box_layer.editable = not was_editable
-        if self.box_layer.editable:
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 박스 편집을 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('edit_boxes'):
+            # toggled off
+            self.box_layer.editable = False
+            try:
+                self.box_layer.mode = 'pan_zoom'
+            except Exception:
+                pass
+            return
+        self.box_layer.visible = True
+        self.box_layer.editable = True
+        self._select_layer(self.box_layer)
+        try:
+            self.viewer.layers.selection.active = self.box_layer
+        except Exception:
+            pass
+        try:
             self.box_layer.mode = 'select'
-            print("Boxes editing enabled - rectangles will maintain shape during editing")
-        else:
-            print("Boxes editing disabled")
+        except Exception:
+            pass
+        self._set_button_active(self.btn_edit_boxes, True)
+        self.viewer.status = "Edit Boxes ON"
+        print("Boxes editing enabled - rectangles will maintain shape during editing")
 
     def update_layers(self):
         self._updating_layers = True
@@ -490,6 +735,9 @@ class ManualPromptNapariGUI(QWidget):
         act = self.prompt_history.pop()
         self.redo_history.append(act)
         self.apply_prompt_history()
+        if self.metrics and self.metrics.is_active():
+            self.metrics.inc_counter('undo_actions', 1)
+            self.metrics.add_event('undo', action=act[0])
 
     def prompt_redo(self):
         if not self.redo_history:
@@ -497,6 +745,9 @@ class ManualPromptNapariGUI(QWidget):
         act = self.redo_history.pop()
         self.prompt_history.append(act)
         self.apply_prompt_history()
+        if self.metrics and self.metrics.is_active():
+            self.metrics.inc_counter('redo_actions', 1)
+            self.metrics.add_event('redo', action=act[0])
 
     def apply_prompt_history(self):
         self.pos_points.clear(); self.neg_points.clear(); self.box_prompts.clear()
@@ -509,6 +760,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def propagate_prompt(self):
         print("Synchronizing layer data before propagate...")
+        prop_start = time.time()
         if hasattr(self, 'box_layer') and len(self.box_layer.data) > 0:
             self._sync_boxes_from_layer()
             print(f"Synced boxes: {self.box_prompts}")
@@ -526,6 +778,8 @@ class ManualPromptNapariGUI(QWidget):
         with torch.no_grad():
             state = self.net.val_init_state(imgs_tensor=sub)
             box_count = 0
+            pos_used = 0
+            neg_used = 0
             for (t, oid, x1, y1, x2, y2) in self.box_prompts:
                 if start <= t <= end:
                     self.net.train_add_new_bbox(
@@ -539,9 +793,11 @@ class ManualPromptNapariGUI(QWidget):
             pm, nm = defaultdict(list), defaultdict(list)
             for (t, oid, y, x) in self.pos_points:
                 if start <= t <= end:
+                    pos_used += 1
                     pm[(t-start, oid)].append((x, y))
             for (t, oid, y, x) in self.neg_points:
                 if start <= t <= end:
+                    neg_used += 1
                     nm[(t-start, oid)].append((x, y))
             for (lt, oid) in set(pm) | set(nm):
                 pts, labs = [], []
@@ -572,6 +828,8 @@ class ManualPromptNapariGUI(QWidget):
             except Exception as e:
                 print(f"Propagation error: {e}")
                 QMessageBox.critical(self, 'Propagation Error', f'Propagation failed: {e}')
+                if self.metrics and self.metrics.is_active():
+                    self.metrics.add_event('propagation_error', message=str(e))
                 return
             finally:
                 self.net.reset_state(state)
@@ -583,6 +841,23 @@ class ManualPromptNapariGUI(QWidget):
             self._update_object_id_text()
             print(f"Propagation completed. Generated masks for {len(result)} frames")
             QMessageBox.information(self, 'Done', f'Propagated {start}~{end}\nGenerated {len(result)} masks')
+            if self.metrics and self.metrics.is_active():
+                end_ts = time.time()
+                slice_count = int(end - start + 1)
+                self.metrics.record_stage(
+                    'propagation_manual',
+                    prop_start,
+                    end_ts,
+                    start_frame=int(start),
+                    end_frame=int(end),
+                    slice_count=slice_count,
+                    frames_with_masks=len(result),
+                    boxes_used=box_count,
+                    pos_points_used=pos_used,
+                    neg_points_used=neg_used,
+                    avg_sec_per_slice=round((end_ts - prop_start) / slice_count, 4) if slice_count > 0 else None,
+                )
+                self.metrics.add_event('propagation_completed', frames_with_masks=len(result))
 
     def save_masks(self):
         save_masks_manual(self)

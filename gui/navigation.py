@@ -1,5 +1,6 @@
 """Navigation manager and navigation-enabled GUI wrappers."""
 import os
+import time
 import numpy as np
 import napari
 import torch
@@ -10,17 +11,19 @@ from dataloader import SNU3DMRI_MedSAM2Dataset, load_dicom_series, load_nii_imag
 from gui.segmentation import auto_segmentation
 from gui.auto_gui import MedSAM2NapariGUI
 from gui.manual_gui import ManualPromptNapariGUI
+from gui.metrics import UsageMetricsRecorder
 
 
 class PatientNavigationManager:
     """Navigation Manager for sequential patient data processing."""
-    def __init__(self, data_root, net, device, default_mode='manual', default_method=None, args=None):
+    def __init__(self, data_root, net, device, default_mode='manual', default_method=None, args=None, metrics_recorder=None):
         self.data_root = data_root
         self.net = net
         self.device = device
         self.default_mode = default_mode
         self.default_method = default_method
         self.args = args
+        self.metrics = metrics_recorder or UsageMetricsRecorder()
         self.current_gui = None
         self.patient_index = 0
         self.user_inputs = {}
@@ -103,8 +106,18 @@ class PatientNavigationManager:
 
     def close_current_gui(self):
         if self.current_gui:
-            self.current_gui.viewer.close()
+            try:
+                self.current_gui.viewer.close()
+            except Exception:
+                pass
+            try:
+                self.current_gui.close()
+            except Exception:
+                pass
             self.current_gui = None
+        if self.metrics and self.metrics.is_active():
+            self.metrics.add_event('session_closed_without_save')
+            self.metrics.finalize({'closed_without_save': True})
 
     def next_patient(self):
         self.close_current_gui()
@@ -129,9 +142,31 @@ class PatientNavigationManager:
             current_preprocess = user_input.get('preprocess', False)
             use_double_viewer = user_input.get('use_double_viewer', False)
             double_path = user_input.get('double_path', None)
+            session_context = {
+                'patient_id': patient_id,
+                'patient_index': self.patient_index,
+                'mode': current_mode,
+                'method': current_method,
+                'preprocess': current_preprocess,
+                'model_version': getattr(self.args, 'version', None),
+            }
+            self.metrics.start_session(session_context)
+            self.metrics.add_event('patient_session_started', **session_context)
             self.user_inputs[patient_id] = user_input
             try:
+                data_load_start = time.time()
                 current_pack = self.load_patient_data(patient_path, patient_name, current_mode, current_method, current_preprocess)
+                img_tensor = current_pack.get('image_3d')
+                if img_tensor is None:
+                    img_tensor = current_pack.get('images')
+                slice_count = int(img_tensor.shape[0]) if (img_tensor is not None and hasattr(img_tensor, 'shape')) else None
+                self.metrics.record_stage(
+                    'data_load',
+                    data_load_start,
+                    time.time(),
+                    patient_path=patient_path,
+                    slice_count=slice_count,
+                )
             except Exception as e:
                 QMessageBox.critical(None, "Data Loading Error", f"Failed to load data for patient {patient_id}:\n{str(e)}")
                 self.current_patient_idx += 1
@@ -143,7 +178,7 @@ class PatientNavigationManager:
                 if double_viewer:
                     self.double_viewers[patient_id] = double_viewer
             if current_mode == 'auto':
-                results = auto_segmentation(current_pack, self.net, self.device, method=current_method)
+                results = auto_segmentation(current_pack, self.net, self.device, method=current_method, metrics=self.metrics)
                 if results:
                     result = results[0] if isinstance(results, list) else results
                     result_patient_id = result.get('patient_id', patient_id)
@@ -159,15 +194,18 @@ class PatientNavigationManager:
                                 if 'bboxes' in prompt_data and prompt_data['bboxes'] is not None:
                                     box_prompts.setdefault(frame_idx, {})[obj_id] = prompt_data['bboxes']
                                 point_prompts.setdefault(frame_idx, {})[obj_id] = prompt_data
+                    self.metrics.add_event('auto_session_ready', start_idx=result.get('start_idx'), end_idx=result.get('end_idx'))
                     self.current_gui = MedSAM2NapariGUIWithNavigation(
                         result['imgs'], result['video_segments'], self.net, self.device,
                         result_patient_id, box_prompts, point_prompts,
-                        result.get('start_idx'), result.get('end_idx'), result.get('meta', {}), self
+                        result.get('start_idx'), result.get('end_idx'), result.get('meta', {}), self,
+                        metrics=self.metrics,
                     )
             elif current_mode == 'manual':
                 original_patient_id = current_pack['meta']['patient']
                 self.current_gui = ManualPromptNapariGUIWithNavigation(
-                    current_pack['image_3d'], self.net, self.device, original_patient_id, current_pack['meta'], self
+                    current_pack['image_3d'], self.net, self.device, original_patient_id, current_pack['meta'], self,
+                    metrics=self.metrics,
                 )
         except Exception as e:
             print(f"Error showing patient GUI: {e}")
@@ -178,9 +216,9 @@ class PatientNavigationManager:
 class MedSAM2NapariGUIWithNavigation(MedSAM2NapariGUI):
     """Navigation-enabled auto GUI."""
     def __init__(self, imgs, video_segments, net, device, patient_id, box_prompts, point_prompts,
-                 start_idx, end_idx, meta, navigation_manager=None):
+                 start_idx, end_idx, meta, navigation_manager=None, metrics=None):
         self.navigation_manager = navigation_manager
-        super().__init__(imgs, video_segments, net, device, patient_id, box_prompts, point_prompts, start_idx, end_idx, meta)
+        super().__init__(imgs, video_segments, net, device, patient_id, box_prompts, point_prompts, start_idx, end_idx, meta, metrics=metrics)
 
     def _build_controls(self):
         super()._build_controls()
@@ -215,9 +253,9 @@ class MedSAM2NapariGUIWithNavigation(MedSAM2NapariGUI):
 
 class ManualPromptNapariGUIWithNavigation(ManualPromptNapariGUI):
     """Navigation-enabled manual GUI."""
-    def __init__(self, imgs, net, device, patient_id, meta, navigation_manager=None):
+    def __init__(self, imgs, net, device, patient_id, meta, navigation_manager=None, metrics=None):
         self.navigation_manager = navigation_manager
-        super().__init__(imgs, net, device, patient_id, meta)
+        super().__init__(imgs, net, device, patient_id, meta, metrics=metrics)
 
     def _build_controls(self):
         super()._build_controls()
@@ -250,10 +288,10 @@ class ManualPromptNapariGUIWithNavigation(ManualPromptNapariGUI):
             self.navigation_manager.close_current_gui()
 
 
-def run_napari_gui_with_navigation(data_root, net, device, args, default_mode='manual', default_method=None):
+def run_napari_gui_with_navigation(data_root, net, device, args, default_mode='manual', default_method=None, metrics_recorder=None):
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    nav_manager = PatientNavigationManager(data_root, net, device, default_mode, default_method, args)
+    nav_manager = PatientNavigationManager(data_root, net, device, default_mode, default_method, args, metrics_recorder)
     nav_manager.show_current_patient()
     napari.run()

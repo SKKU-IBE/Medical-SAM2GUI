@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import napari
+import time
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -9,7 +10,10 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QPushButton,
     QMessageBox,
+    QShortcut,
 )
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import Qt
 from collections import deque, defaultdict
 import traceback
 import threading
@@ -18,6 +22,7 @@ from scipy.ndimage import center_of_mass
 from gui.prompts import make_initial_label_stack, normalize_box_prompts, normalize_point_prompts
 from gui.rendering import render_auto_volume
 from gui.io import save_masks_auto
+from gui.metrics import UsageMetricsRecorder
 
 
 class MedSAM2NapariGUI(QWidget):
@@ -32,7 +37,8 @@ class MedSAM2NapariGUI(QWidget):
         point_prompts,        # seg: {frame_idx: {obj_id: {"bboxes": [...], "points": [...]}}}
         start_idx,
         end_idx,
-        meta                  # spacing, origin, direction
+        meta,                 # spacing, origin, direction
+        metrics: UsageMetricsRecorder = None
     ):
         super().__init__()
         # State
@@ -42,6 +48,11 @@ class MedSAM2NapariGUI(QWidget):
         self.device = device
         self.patient_id = patient_id
         self.meta = meta
+        self.metrics = metrics
+        self.session_started_at = time.time()
+        self.first_user_prompt_ts = None
+        self.manual_edit_started_at = None
+        self.manual_edit_total_sec = 0.0
         self.start_idx = start_idx
         self.end_idx = end_idx
         
@@ -96,9 +107,19 @@ class MedSAM2NapariGUI(QWidget):
             np.empty((0,4,3)), name='User Boxes', shape_type='rectangle',
             edge_color='red', face_color=[0,0,0,0]
         )
+        self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))
+        self._attach_mode_guard(self.user_box_layer, allowed_modes=('select', 'pan_zoom'))
         self.user_pts_layer.editable = False
         self.user_box_layer.editable = False
         self.manual_edit_enabled = False  # allow freehand label/box editing on demand
+        self.active_tool = None  # track current prompt/edit tool for toggling
+        # Button references for visual states
+        self.btn_add_pos = None
+        self.btn_add_neg = None
+        self.btn_add_box = None
+        self.manual_edit_button = None
+        self.btn_edit_points = None
+        self.btn_edit_boxes = None
 
         # Controls
         self._build_controls()
@@ -111,6 +132,15 @@ class MedSAM2NapariGUI(QWidget):
         self._setup_layer_callbacks()
         
         self.update_prompt_layers()
+        auto_box_count = sum(len(objs) for objs in self.box_prompts.values())
+        auto_point_count = sum(len(pts) for objs in self.point_prompts.values() for pts in objs.values())
+        self._bind_shortcuts()
+        self._bind_qshortcuts()
+        if self.metrics and self.metrics.is_active():
+            self.metrics.add_event('auto_gui_initialized', n_frames=self.n_frames, patient_id=str(self.patient_id))
+            self.metrics.set_info('n_frames', int(self.n_frames))
+            self.metrics.set_info('auto_init_boxes', int(auto_box_count))
+            self.metrics.set_info('auto_init_points', int(auto_point_count))
 
     def _setup_viewer_callbacks(self):
         """Detect Napari viewer step changes to automatically update frame_idx"""
@@ -142,6 +172,16 @@ class MedSAM2NapariGUI(QWidget):
             if getattr(self, '_updating_layers', False):
                 return
             self._sync_user_points_from_layer()
+
+        @self.mask_layer.events.data.connect
+        def on_mask_data_change(event=None):
+            if not getattr(self, 'manual_edit_enabled', False):
+                return
+            if getattr(self, '_updating_layers', False):
+                return
+            if self.metrics and self.metrics.is_active():
+                self.metrics.inc_counter('manual_edit_strokes', 1)
+                self.metrics.add_event('manual_edit_stroke', frame=int(self.frame_idx))
         
         self._setup_box_editing_events()
 
@@ -171,6 +211,15 @@ class MedSAM2NapariGUI(QWidget):
                 self._user_box_edit_timer.cancel()
             self._user_box_edit_timer = threading.Timer(0.3, self._sync_user_boxes_with_rectangle_constraint)
             self._user_box_edit_timer.start()
+
+    def _record_prompt_event(self, kind, frame_idx, obj_id):
+        if not self.metrics or not self.metrics.is_active():
+            return
+        self.metrics.inc_counter(f'{kind}_count', 1)
+        self.metrics.add_event('prompt_added', kind=kind, frame=int(frame_idx), obj_id=int(obj_id))
+        if self.first_user_prompt_ts is None:
+            self.first_user_prompt_ts = time.time()
+            self.metrics.set_info('time_to_first_user_prompt_sec', round(self.first_user_prompt_ts - self.session_started_at, 3))
 
     def _sync_auto_boxes_with_rectangle_constraint(self):
         """Sync auto boxes with rectangle constraint - support both shrinking/expanding"""
@@ -539,32 +588,127 @@ class MedSAM2NapariGUI(QWidget):
         layout.addLayout(ohl)
         self.manual_edit_button = None
         btns = [
-            ('Add +Pt', self.enable_add_user_pos),
-            ('Add -Pt', self.enable_add_user_neg),
-            ('Add Box', self.enable_add_user_box),
-            ('Manual Edit', self.toggle_manual_annotation),
-            ('Edit Auto Pts', self.toggle_edit_auto_pts),
-            ('Edit Auto Boxes', self.toggle_edit_auto_boxes),
-            ('Edit User Pts', self.toggle_edit_user_pts),
-            ('Edit User Boxes', self.toggle_edit_user_boxes),
-            ('Toggle Object IDs', self.toggle_text_visibility),
-            ('Propagate', self.propagate_prompt),
-            ('3D Volume Render', lambda: render_auto_volume(self)),
-            ('Undo', self.prompt_undo),
-            ('Redo', self.prompt_redo),
-            ('Save', lambda: save_masks_auto(self))
+            ('Add +Pt', self.enable_add_user_pos, 'btn_add_pos'),
+            ('Add -Pt', self.enable_add_user_neg, 'btn_add_neg'),
+            ('Add Box', self.enable_add_user_box, 'btn_add_box'),
+            ('Manual Edit', self.toggle_manual_annotation, 'manual_edit_button'),
+            ('Edit Auto Pts', self.toggle_edit_auto_pts, None),
+            ('Edit Auto Boxes', self.toggle_edit_auto_boxes, None),
+            ('Edit User Pts', self.toggle_edit_user_pts, 'btn_edit_points'),
+            ('Edit User Boxes', self.toggle_edit_user_boxes, 'btn_edit_boxes'),
+            ('Toggle Object IDs', self.toggle_text_visibility, None),
+            ('Propagate', self.propagate_prompt, None),
+            ('3D Volume Render', lambda: render_auto_volume(self), None),
+            ('Undo', self.prompt_undo, None),
+            ('Redo', self.prompt_redo, None),
+            ('Save', lambda: save_masks_auto(self), None)
         ]
-        for lbl, fn in btns:
+        for lbl, fn, attr in btns:
             btn = QPushButton(lbl)
-            if lbl == 'Manual Edit':
-                self.manual_edit_button = btn
             btn.clicked.connect(fn)
             layout.addWidget(btn)
+            if attr:
+                setattr(self, attr, btn)
         self.setLayout(layout)
 
     def _select_layer(self, layer):
         try:
             self.viewer.layers.selection = [layer]
+            # make it the active layer explicitly so mode/edits apply
+            self.viewer.layers.selection.active = layer
+            self._focus_viewer_canvas()
+        except Exception:
+            pass
+
+    def _focus_viewer_canvas(self):
+        try:
+            if hasattr(self.viewer, 'window') and hasattr(self.viewer.window, 'qt_viewer'):
+                canvas = getattr(self.viewer.window.qt_viewer, 'canvas', None)
+                if canvas and hasattr(canvas, 'native'):
+                    canvas.native.setFocus()
+        except Exception:
+            pass
+
+    def _bind_shortcuts(self):
+        keymap = [
+            ('h', self.enable_add_user_pos),
+            ('j', self.enable_add_user_neg),
+            ('a', self.enable_add_user_box),
+            ('q', self.toggle_manual_annotation),
+            ('k', self.toggle_edit_user_pts),
+            ('z', self.toggle_edit_user_boxes),
+            ('y', lambda: self._set_mask_opacity(0.0)),
+            ('o', lambda: self._set_mask_opacity(1.0)),
+            ('u', lambda: self._bump_mask_opacity(-0.1)),
+            ('i', lambda: self._bump_mask_opacity(0.1)),
+        ]
+        for key, handler in keymap:
+            self.viewer.bind_key(key, lambda v, h=handler: h(), overwrite=True)
+        self.viewer.bind_key('s', lambda v: save_masks_auto(self))
+        self.viewer.bind_key('Control-Z', lambda v: self.prompt_undo())
+        self.viewer.bind_key('Control-Y', lambda v: self.prompt_redo())
+        self.viewer.bind_key('Control-S', lambda v: save_masks_auto(self))
+        self.viewer.bind_key('Ctrl+Z', lambda v: self.prompt_undo())
+        self.viewer.bind_key('Ctrl+Y', lambda v: self.prompt_redo())
+        self.viewer.bind_key('Ctrl+S', lambda v: save_masks_auto(self))
+        if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
+            self.viewer.bind_key('n', lambda v: self.next_patient(), overwrite=True)
+
+    def _bind_qshortcuts(self):
+        # Qt-level shortcuts to ensure undo/redo work even when dock widget has focus
+        self._qt_shortcuts = []
+        for seq, handler in [
+            ('Ctrl+Z', self.prompt_undo),
+            ('Ctrl+Y', self.prompt_redo),
+            ('Ctrl+S', lambda: save_masks_auto(self)),
+            ('Z', self.toggle_edit_user_boxes),
+            ('z', self.toggle_edit_user_boxes),
+            ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
+        ]:
+            if handler:
+                sc = QShortcut(QKeySequence(seq), self)
+                sc.setContext(Qt.ApplicationShortcut)
+                sc.activated.connect(handler)
+                self._qt_shortcuts.append(sc)
+
+    def _attach_mode_guard(self, layer, allowed_modes=('select',)):
+        def _on_mode_change(event=None):
+            try:
+                if layer.mode not in allowed_modes:
+                    layer.mode = allowed_modes[0]
+            except Exception:
+                pass
+        try:
+            layer.events.mode.connect(_on_mode_change)
+        except Exception:
+            pass
+
+    def _set_button_active(self, btn, active):
+        if not btn:
+            return
+        if active:
+            btn.setStyleSheet('background-color: lightgreen; font-weight: bold;')
+        else:
+            btn.setStyleSheet('')
+
+    def _reset_prompt_buttons(self):
+        for b in (self.btn_add_pos, self.btn_add_neg, self.btn_add_box):
+            self._set_button_active(b, False)
+        self._set_button_active(self.btn_edit_points, False)
+        self._set_button_active(self.btn_edit_boxes, False)
+
+    def _set_mask_opacity(self, value):
+        try:
+            self.mask_layer.opacity = float(np.clip(value, 0.0, 1.0))
+            self.viewer.status = f"Mask opacity: {self.mask_layer.opacity:.2f}"
+        except Exception:
+            pass
+
+    def _bump_mask_opacity(self, delta):
+        try:
+            new_opacity = float(np.clip(self.mask_layer.opacity + delta, 0.0, 1.0))
+            self.mask_layer.opacity = new_opacity
+            self.viewer.status = f"Mask opacity: {new_opacity:.2f}"
         except Exception:
             pass
 
@@ -590,6 +734,10 @@ class MedSAM2NapariGUI(QWidget):
         self.mask_layer.mouse_drag_callbacks.clear()
         self.auto_pts_layer.editable = False
         self.auto_box_layer.editable = False
+        if self.active_tool == 'edit_pts':
+            self.user_pts_layer.editable = False
+        if self.active_tool == 'edit_boxes':
+            self.user_box_layer.editable = False
         if not self.manual_edit_enabled:
             self.user_pts_layer.editable = False
             self.user_box_layer.editable = False
@@ -598,10 +746,28 @@ class MedSAM2NapariGUI(QWidget):
                 self.mask_layer.mode = 'pan_zoom'
             except Exception:
                 pass
+        self._reset_prompt_buttons()
+        self.active_tool = None
+
+    def _activate_tool(self, name):
+        if self.manual_edit_enabled and name != 'manual_edit':
+            print("Manual Edit 활성화 중에는 다른 도구를 사용할 수 없습니다. Manual Edit을 끄세요.")
+            return False
+        if self.active_tool == name:
+            self.cancel_prompt_mode()
+            return False
+        self.cancel_prompt_mode()
+        self.active_tool = name
+        return True
 
     def enable_add_user_pos(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 점 추가를 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('add_pos'):
+            return
         self._select_layer(self.user_pts_layer)
+        self._set_button_active(self.btn_add_pos, True)
         def cb(layer, evt):
             if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
@@ -614,12 +780,18 @@ class MedSAM2NapariGUI(QWidget):
             self.prompt_history.append(('add_pos_pt', t, self.current_obj_id, x, y))
             self.redo_history.clear()
             self.update_prompt_layers()
+            self._record_prompt_event('user_pos_point', t, self.current_obj_id)
             print(f"Added positive point at frame {t}, position ({x}, {y}) - should be GREEN")
         self.img_layer.mouse_drag_callbacks.append(cb)
 
     def enable_add_user_neg(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 점 추가를 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('add_neg'):
+            return
         self._select_layer(self.user_pts_layer)
+        self._set_button_active(self.btn_add_neg, True)
         def cb(layer, evt):
             if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
@@ -632,6 +804,7 @@ class MedSAM2NapariGUI(QWidget):
             self.prompt_history.append(('add_neg_pt', t, self.current_obj_id, x, y))
             self.redo_history.clear()
             self.update_prompt_layers()
+            self._record_prompt_event('user_neg_point', t, self.current_obj_id)
             print(f"Added negative point at frame {t}, position ({x}, {y}) - should be RED")
         self.img_layer.mouse_drag_callbacks.append(cb)
 
@@ -639,8 +812,11 @@ class MedSAM2NapariGUI(QWidget):
         if self.manual_edit_enabled:
             print("Manual Edit is active: box prompt creation is disabled.")
             return
-        self.cancel_prompt_mode()
+        if not self._activate_tool('add_box'):
+            return
         self._select_layer(self.mask_layer)
+        self.mask_layer.editable = True  # ensure drag callbacks fire on labels layer
+        self._set_button_active(self.btn_add_box, True)
         pts = []
         def cb(layer, evt):
             if self.manual_edit_enabled:
@@ -659,12 +835,15 @@ class MedSAM2NapariGUI(QWidget):
                 self.redo_history.clear()
                 pts.clear()
                 self.update_prompt_layers()
+                self._record_prompt_event('user_box', t, self.current_obj_id)
                 print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
         self.mask_layer.mouse_drag_callbacks.append(cb)
 
     def toggle_manual_annotation(self):
         # Enable napari's native painting/box drawing without needing prompt buttons
         self.manual_edit_enabled = not self.manual_edit_enabled
+        self._reset_prompt_buttons()
+        self.active_tool = None
         if self.manual_edit_enabled:
             # Clear drag callbacks to stop creating box prompts while in manual mode
             self.img_layer.mouse_drag_callbacks.clear()
@@ -681,11 +860,11 @@ class MedSAM2NapariGUI(QWidget):
             except Exception:
                 pass
             self._select_layer(self.mask_layer)
-            if self.manual_edit_button:
-                self.manual_edit_button.setText('Manual Edit (ON)')
-                self.manual_edit_button.setStyleSheet('background-color: lightgreen; font-weight: bold;')
+            self._set_button_active(self.manual_edit_button, True)
             self.viewer.status = "Manual Edit ON"
             print("Manual annotation enabled: paint on 'Mask' layer or draw rectangles in 'User Boxes'.")
+            if self.metrics and self.metrics.is_active():
+                self.manual_edit_started_at = time.time()
         else:
             self.img_layer.mouse_drag_callbacks.clear()
             self.mask_layer.mouse_drag_callbacks.clear()
@@ -699,11 +878,17 @@ class MedSAM2NapariGUI(QWidget):
                 self.user_box_layer.mode = 'select'
             except Exception:
                 pass
-            if self.manual_edit_button:
-                self.manual_edit_button.setText('Manual Edit')
-                self.manual_edit_button.setStyleSheet('')
+            self._set_button_active(self.manual_edit_button, False)
             self.viewer.status = "Manual Edit OFF"
             print("Manual annotation disabled.")
+            if self.metrics and self.metrics.is_active() and self.manual_edit_started_at:
+                interval = time.time() - self.manual_edit_started_at
+                self.manual_edit_total_sec += interval
+                self.metrics.record_stage('manual_edit_interval', self.manual_edit_started_at, time.time(), duration_sec=round(interval, 4))
+                self.manual_edit_started_at = None
+        if self.metrics and self.metrics.is_active():
+            self.metrics.inc_counter('manual_edit_toggles', 1)
+            self.metrics.add_event('manual_edit_toggled', enabled=self.manual_edit_enabled)
 
     def toggle_edit_auto_pts(self):
         self.cancel_prompt_mode()
@@ -727,25 +912,33 @@ class MedSAM2NapariGUI(QWidget):
             print("Auto boxes editing disabled")
 
     def toggle_edit_user_pts(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 포인트 편집을 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('edit_pts'):
+            self.user_pts_layer.editable = False
+            return
         self._select_layer(self.user_pts_layer)
-        was_editable = self.user_pts_layer.editable
-        self.user_pts_layer.editable = not was_editable
-        if self.user_pts_layer.editable:
-            print("User points editing enabled - you can move/delete user points")
-        else:
-            print("User points editing disabled")
+        self.user_pts_layer.editable = True
+        self._set_button_active(self.btn_edit_points, True)
+        print("User points editing enabled - you can move/delete user points")
 
     def toggle_edit_user_boxes(self):
-        self.cancel_prompt_mode()
+        if self.manual_edit_enabled:
+            print("Manual Edit이 켜져 있어 박스 편집을 사용할 수 없습니다.")
+            return
+        if not self._activate_tool('edit_boxes'):
+            self.user_box_layer.editable = False
+            try:
+                self.user_box_layer.mode = 'pan_zoom'
+            except Exception:
+                pass
+            return
         self._select_layer(self.user_box_layer)
-        was_editable = self.user_box_layer.editable
-        self.user_box_layer.editable = not was_editable
-        if self.user_box_layer.editable:
-            self.user_box_layer.mode = 'select'
-            print("User boxes editing enabled - rectangles will maintain shape during editing")
-        else:
-            print("User boxes editing disabled")
+        self.user_box_layer.editable = True
+        self.user_box_layer.mode = 'select'
+        self._set_button_active(self.btn_edit_boxes, True)
+        print("User boxes editing enabled - rectangles will maintain shape during editing")
 
     def update_prompt_layers(self):
         self._updating_layers = True
@@ -861,6 +1054,9 @@ class MedSAM2NapariGUI(QWidget):
                 if not self.box_prompts[t]:
                     del self.box_prompts[t]
         self.update_prompt_layers()
+        if self.metrics and self.metrics.is_active():
+            self.metrics.inc_counter('undo_actions', 1)
+            self.metrics.add_event('undo', action=action_type)
 
     def prompt_redo(self):
         if not self.redo_history:
@@ -888,8 +1084,12 @@ class MedSAM2NapariGUI(QWidget):
                 self.box_prompts[t] = {}
             self.box_prompts[t][obj_id] = [x1, y1, x2, y2]
         self.update_prompt_layers()
+        if self.metrics and self.metrics.is_active():
+            self.metrics.inc_counter('redo_actions', 1)
+            self.metrics.add_event('redo', action=action_type)
 
     def propagate_prompt(self):
+        prop_start = time.time()
         all_prompt_frames = set()
         all_prompt_frames.update(self.box_prompts.keys())
         all_prompt_frames.update(self.point_prompts.keys())
@@ -898,54 +1098,74 @@ class MedSAM2NapariGUI(QWidget):
             return
         start_idx = min(all_prompt_frames)
         end_idx = max(all_prompt_frames)
+        boxes_used = sum(len(objs) for frame_idx, objs in self.box_prompts.items() if start_idx <= frame_idx <= end_idx)
+        pos_used = 0
+        neg_used = 0
+        for frame_idx, objs in self.point_prompts.items():
+            if start_idx <= frame_idx <= end_idx:
+                for pts_list in objs.values():
+                    for pt_info in pts_list:
+                        if len(pt_info) >= 3:
+                            if pt_info[2] == 1:
+                                pos_used += 1
+                            elif pt_info[2] == 0:
+                                neg_used += 1
         sub_imgs = self.imgs[start_idx:end_idx+1].to(self.device)
-        with torch.no_grad():
-            state = self.net.val_init_state(imgs_tensor=sub_imgs)
-            for frame_idx, objs in self.box_prompts.items():
-                if start_idx <= frame_idx <= end_idx:
-                    local_idx = frame_idx - start_idx
-                    for obj_id, box in objs.items():
-                        if isinstance(box, torch.Tensor):
-                            box_tensor = box.to(self.device)
-                        else:
-                            box_tensor = torch.tensor(box, device=self.device)
-                        self.net.train_add_new_bbox(
-                            inference_state=state,
-                            frame_idx=local_idx,
-                            obj_id=obj_id,
-                            bbox=box_tensor,
-                            clear_old_points=False
-                        )
-            for frame_idx, objs in self.point_prompts.items():
-                if start_idx <= frame_idx <= end_idx:
-                    local_idx = frame_idx - start_idx
-                    for obj_id, pts_list in objs.items():
-                        if pts_list:
-                            points = []
-                            labels = []
-                            for pt_info in pts_list:
-                                if len(pt_info) >= 3:
-                                    x, y, label = pt_info[:3]
-                                    points.append([x, y])
-                                    labels.append(label)
-                            if points:
-                                points_tensor = torch.tensor(points, device=self.device)
-                                labels_tensor = torch.tensor(labels, dtype=torch.long, device=self.device)
-                                self.net.train_add_new_points(
-                                    inference_state=state,
-                                    frame_idx=local_idx,
-                                    obj_id=obj_id,
-                                    points=points_tensor,
-                                    labels=labels_tensor,
-                                    clear_old_points=False
-                                )
-            for out_local_idx, out_oids, out_logits in self.net.propagate_in_video(state, start_frame_idx=0):
-                global_idx = start_idx + out_local_idx
-                self.video_segments[global_idx] = {
-                    oid: logits.cpu()
-                    for oid, logits in zip(out_oids, out_logits)
-                }
-            self.net.reset_state(state)
+        propagated_frames = set()
+        try:
+            with torch.no_grad():
+                state = self.net.val_init_state(imgs_tensor=sub_imgs)
+                for frame_idx, objs in self.box_prompts.items():
+                    if start_idx <= frame_idx <= end_idx:
+                        local_idx = frame_idx - start_idx
+                        for obj_id, box in objs.items():
+                            if isinstance(box, torch.Tensor):
+                                box_tensor = box.to(self.device)
+                            else:
+                                box_tensor = torch.tensor(box, device=self.device)
+                            self.net.train_add_new_bbox(
+                                inference_state=state,
+                                frame_idx=local_idx,
+                                obj_id=obj_id,
+                                bbox=box_tensor,
+                                clear_old_points=False
+                            )
+                for frame_idx, objs in self.point_prompts.items():
+                    if start_idx <= frame_idx <= end_idx:
+                        local_idx = frame_idx - start_idx
+                        for obj_id, pts_list in objs.items():
+                            if pts_list:
+                                points = []
+                                labels = []
+                                for pt_info in pts_list:
+                                    if len(pt_info) >= 3:
+                                        x, y, label = pt_info[:3]
+                                        points.append([x, y])
+                                        labels.append(label)
+                                if points:
+                                    points_tensor = torch.tensor(points, device=self.device)
+                                    labels_tensor = torch.tensor(labels, dtype=torch.long, device=self.device)
+                                    self.net.train_add_new_points(
+                                        inference_state=state,
+                                        frame_idx=local_idx,
+                                        obj_id=obj_id,
+                                        points=points_tensor,
+                                        labels=labels_tensor,
+                                        clear_old_points=False
+                                    )
+                for out_local_idx, out_oids, out_logits in self.net.propagate_in_video(state, start_frame_idx=0):
+                    global_idx = start_idx + out_local_idx
+                    propagated_frames.add(global_idx)
+                    self.video_segments[global_idx] = {
+                        oid: logits.cpu()
+                        for oid, logits in zip(out_oids, out_logits)
+                    }
+                self.net.reset_state(state)
+        except Exception as e:
+            if self.metrics and self.metrics.is_active():
+                self.metrics.add_event('propagation_error', message=str(e))
+            QMessageBox.critical(self, 'Propagation Error', f'Propagation failed: {e}')
+            return
         self.mask_layer.data = make_initial_label_stack(
             video_segments=self.video_segments,
             obj_ids=self.obj_ids,
@@ -954,6 +1174,23 @@ class MedSAM2NapariGUI(QWidget):
         )
         self.update_text_layer()
         print(f'Propagation done for frames {start_idx}-{end_idx}')
+        if self.metrics and self.metrics.is_active():
+            end_ts = time.time()
+            slice_count = int(end_idx - start_idx + 1)
+            self.metrics.record_stage(
+                'propagation_auto',
+                prop_start,
+                end_ts,
+                start_frame=int(start_idx),
+                end_frame=int(end_idx),
+                slice_count=slice_count,
+                frames_with_masks=len(propagated_frames),
+                boxes_used=boxes_used,
+                pos_points_used=pos_used,
+                neg_points_used=neg_used,
+                avg_sec_per_slice=round((end_ts - prop_start) / slice_count, 4) if slice_count > 0 else None,
+            )
+            self.metrics.add_event('propagation_completed', frames_with_masks=len(propagated_frames))
 
     def on_frame_change(self, val):
         self.frame_idx = val

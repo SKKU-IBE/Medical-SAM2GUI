@@ -1,13 +1,18 @@
 """Auto segmentation helper."""
+import time
 import torch
+from typing import Optional
+
+from gui.metrics import UsageMetricsRecorder
 
 
-def auto_segmentation(pack, net, device, method='det'):
+def auto_segmentation(pack, net, device, method='det', metrics: Optional[UsageMetricsRecorder] = None):
     """Perform auto-segmentation using MedSAM2 network from pack data."""
     net.eval()
     results = []
 
     with torch.no_grad():
+        stage_start = time.time()
         imgs = pack['images']
         if imgs.ndim == 5:
             imgs = imgs.squeeze(0)
@@ -119,5 +124,16 @@ def auto_segmentation(pack, net, device, method='det'):
             })
         else:
             raise ValueError(f"Unsupported method: {method}")
+
+        if metrics and metrics.is_active():
+            metrics.record_stage(
+                'auto_segmentation',
+                stage_start,
+                time.time(),
+                method=method,
+                slice_count=int(end_idx - start_idx + 1) if 'start_idx' in locals() and start_idx is not None else None,
+                box_prompt_slices=len(box_prompts) if method in ['cls-det', 'det'] else len(sel_prompts) if 'sel_prompts' in locals() else 0,
+                point_prompt_slices=0 if method in ['cls-det', 'det'] else len(sel_prompts) if 'sel_prompts' in locals() else 0,
+            )
 
     return results
