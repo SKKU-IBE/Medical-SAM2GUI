@@ -2,6 +2,7 @@
 import numpy as np
 import torch
 import traceback
+import time
 import SimpleITK as sitk
 from pathlib import Path
 from PIL import Image
@@ -42,7 +43,11 @@ def save_masks_auto(gui):
         mask_data = gui.mask_layer.data
         if mask_data.sum() == 0:
             QMessageBox.warning(gui, "Save Failed", "No masks to save.")
+            if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+                gui.metrics.add_event('save_skipped', reason='no_masks')
             return
+
+        save_start = time.time()
 
         spacing = gui.meta.get('spacing', [1.0, 1.0, 1.0])
         origin = gui.meta.get('origin', [0.0, 0.0, 0.0])
@@ -144,11 +149,24 @@ def save_masks_auto(gui):
             f"  Direction: {'3x3 Matrix applied' if len(direction)==9 else 'Applied'}\n"
         )
         QMessageBox.information(gui, "Save Completed", success_msg)
+        if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+            gui.metrics.record_stage(
+                'save_masks_auto',
+                save_start,
+                time.time(),
+                patient_id=str(gui.patient_id),
+                labels_saved=int(saved_count),
+                slice_count=int(mask_data.shape[0]) if hasattr(mask_data, 'shape') else None,
+                save_dir=str(patient_dir),
+            )
+            gui.metrics.finalize({'mode': 'auto', 'save_dir': str(patient_dir)})
     except Exception as e:
         error_msg = f"Error occurred while saving mask:\n{str(e)}"
         print(f"❌ {error_msg}")
         traceback.print_exc()
         QMessageBox.critical(gui, "Save Failed", error_msg)
+        if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+            gui.metrics.add_event('save_error', message=str(e))
 
 
 def save_masks_manual(gui):
@@ -165,7 +183,11 @@ def save_masks_manual(gui):
         mask3d_resized = gui.mask_layer.data
         if mask3d_resized.sum() == 0:
             QMessageBox.warning(gui, "Save Failed", "No masks to save.")
+            if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+                gui.metrics.add_event('save_skipped', reason='no_masks')
             return
+
+        save_start = time.time()
 
         ori_shape = gui.meta.get('shape', mask3d_resized.shape)
         if hasattr(ori_shape, 'numpy'):
@@ -292,6 +314,19 @@ def save_masks_manual(gui):
             message += f"\nRestored to original size: {full_mask_original.shape}"
 
         QMessageBox.information(gui, "Save Complete", message)
+        if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+            gui.metrics.record_stage(
+                'save_masks_manual',
+                save_start,
+                time.time(),
+                patient_id=str(patient_name),
+                labels_saved=int(saved_count),
+                slice_count=int(mask3d_resized.shape[0]) if hasattr(mask3d_resized, 'shape') else None,
+                save_dir=str(patient_dir),
+            )
+            gui.metrics.finalize({'mode': 'manual', 'save_dir': str(patient_dir)})
     except Exception as e:
         QMessageBox.critical(gui, "Save Failed", f"An error occurred while saving masks:\n{str(e)}")
         traceback.print_exc()
+        if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+            gui.metrics.add_event('save_error', message=str(e))

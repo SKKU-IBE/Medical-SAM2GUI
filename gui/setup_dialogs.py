@@ -66,8 +66,8 @@ class InitialSetupDialog(QDialog):
         method_layout = QVBoxLayout()
 
         self.method_group = QButtonGroup()
-        self.cls_det_radio = QRadioButton("det (Detection)")
-        self.seg_radio = QRadioButton("seg (Segmentation)")
+        self.cls_det_radio = QRadioButton("Detection")
+        self.seg_radio = QRadioButton("Segmentation")
         self.seg_radio.setChecked(True)
 
         self.method_group.addButton(self.cls_det_radio, 0)
@@ -222,8 +222,8 @@ class PatientInputDialog(QDialog):
         layout.addWidget(self.method_label)
 
         self.method_combo = QComboBox()
-        self.method_combo.addItems(["det", "seg"])
-        self.method_combo.setCurrentText("seg")
+        self.method_combo.addItems(["Detection", "Segmentation"])
+        self.method_combo.setCurrentText("Segmentation")
         layout.addWidget(self.method_combo)
 
         self.on_mode_changed("manual")
@@ -254,22 +254,22 @@ class PatientInputDialog(QDialog):
 
         desc_text = QLabel(
             """
-Mode Description:
-• auto: Perform automatic segmentation
-• manual: Manual prompt input
+    Mode Description:
+    - auto: Perform automatic segmentation
+    - manual: Manual prompt input
 
-Method Description (for auto mode):
-• det: Detection
-• seg: Segmentation with prompts
+    Method Description (for auto mode):
+    - Detection: Detection
+    - Segmentation: Segmentation with prompts
 
-Preprocessing:
-• N4 bias field correction to correct MRI signal inhomogeneity
-• Intensity clipping (0.5%~99.5%) and Z-score normalization
-• Preprocessing results are automatically saved in preprocessed folder
+    Preprocessing:
+    - N4 bias field correction to correct MRI signal inhomogeneity
+    - Intensity clipping (0.5%~99.5%) and Z-score normalization
+    - Preprocessing results are automatically saved in preprocessed folder
 
-Double Viewer:
-• Display another image simultaneously in an additional viewer
-• Can select DICOM folder or NIfTI file
+    Double Viewer:
+    - Display another image simultaneously in an additional viewer
+    - Can select DICOM folder or NIfTI file
         """
         )
         desc_text.setStyleSheet("font-size: 10px; color: gray;")
