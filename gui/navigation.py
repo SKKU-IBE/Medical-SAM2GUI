@@ -138,10 +138,22 @@ class PatientNavigationManager:
                 self.show_current_patient()
                 return
             current_mode = user_input.get('mode', self.default_mode)
-            current_method = user_input.get('method', self.default_method)
+            raw_method = user_input.get('method', self.default_method)
+            current_method = None
+            if isinstance(raw_method, str):
+                rm = raw_method.lower()
+                if rm.startswith('det') or rm == 'cls-det':
+                    current_method = 'det'
+                elif rm.startswith('seg'):
+                    current_method = 'seg'
+            if current_method is None:
+                current_method = self.default_method
             current_preprocess = user_input.get('preprocess', False)
             use_double_viewer = user_input.get('use_double_viewer', False)
             double_path = user_input.get('double_path', None)
+            det_model = user_input.get('det_model', 'sam2_det')
+            seg_model = user_input.get('seg_model', 'sam2_seg')
+            nnunet_model_path = user_input.get('nnunet_model_path', None)
             session_context = {
                 'patient_id': patient_id,
                 'patient_index': self.patient_index,
@@ -178,7 +190,16 @@ class PatientNavigationManager:
                 if double_viewer:
                     self.double_viewers[patient_id] = double_viewer
             if current_mode == 'auto':
-                results = auto_segmentation(current_pack, self.net, self.device, method=current_method, metrics=self.metrics)
+                results = auto_segmentation(
+                    current_pack,
+                    self.net,
+                    self.device,
+                    method=current_method,
+                    det_model=det_model,
+                    seg_model=seg_model,
+                    nnunet_model_path=nnunet_model_path,
+                    metrics=self.metrics,
+                )
                 if results:
                     result = results[0] if isinstance(results, list) else results
                     result_patient_id = result.get('patient_id', patient_id)

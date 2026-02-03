@@ -180,6 +180,9 @@ class PatientInputDialog(QDialog):
         self.use_double_viewer = False
         self.double_path = None
         self.preprocess = False
+        self.det_model = "sam2_det"
+        self.seg_model = "sam2_seg"
+        self.nnunet_model_path = None
 
         layout = QVBoxLayout()
 
@@ -224,7 +227,38 @@ class PatientInputDialog(QDialog):
         self.method_combo = QComboBox()
         self.method_combo.addItems(["Detection", "Segmentation"])
         self.method_combo.setCurrentText("Segmentation")
+        self.method_combo.currentTextChanged.connect(self.on_method_changed)
         layout.addWidget(self.method_combo)
+
+        self.det_model_label = QLabel("Detection Model:")
+        self.det_model_label.setStyleSheet("font-weight: bold;")
+        self.det_model_combo = QComboBox()
+        self.det_model_combo.addItems(["sam2_det", "custom"])
+        self.det_model_combo.currentTextChanged.connect(self.on_det_model_changed)
+        self.det_model_custom_input = QLineEdit()
+        self.det_model_custom_input.setPlaceholderText("입력: 커스텀 detection 모델 이름")
+        layout.addWidget(self.det_model_label)
+        layout.addWidget(self.det_model_combo)
+        layout.addWidget(self.det_model_custom_input)
+
+        self.seg_model_label = QLabel("Segmentation Model:")
+        self.seg_model_label.setStyleSheet("font-weight: bold;")
+        self.seg_model_combo = QComboBox()
+        self.seg_model_combo.addItems(["sam2_seg", "nnUNetv2"])
+        self.seg_model_combo.currentTextChanged.connect(lambda _: self.on_method_changed(self.method_combo.currentText()))
+        layout.addWidget(self.seg_model_label)
+        layout.addWidget(self.seg_model_combo)
+
+        self.nnunet_path_label = QLabel("nnUNetv2 모델 폴더:")
+        self.nnunet_path_input = QLineEdit()
+        self.nnunet_path_input.setPlaceholderText("/path/to/nnunetv2_model")
+        self.nnunet_path_browse = QPushButton("Browse")
+        self.nnunet_path_browse.clicked.connect(self.browse_nnunet_path)
+        nnunet_path_layout = QHBoxLayout()
+        nnunet_path_layout.addWidget(self.nnunet_path_label)
+        nnunet_path_layout.addWidget(self.nnunet_path_input)
+        nnunet_path_layout.addWidget(self.nnunet_path_browse)
+        layout.addLayout(nnunet_path_layout)
 
         self.on_mode_changed("manual")
         layout.addWidget(QLabel(""))
@@ -294,11 +328,40 @@ class PatientInputDialog(QDialog):
         if mode == "manual":
             self.method_combo.setEnabled(False)
             self.method_label.setEnabled(False)
+            self.det_model_combo.setEnabled(False)
+            self.det_model_label.setEnabled(False)
+            self.seg_model_combo.setEnabled(False)
+            self.seg_model_label.setEnabled(False)
+            self.nnunet_path_input.setEnabled(False)
+            self.nnunet_path_label.setEnabled(False)
+            self.nnunet_path_browse.setEnabled(False)
             self.method = None
         else:
             self.method_combo.setEnabled(True)
             self.method_label.setEnabled(True)
             self.method = self.method_combo.currentText()
+            self.on_method_changed(self.method)
+
+    def on_method_changed(self, method):
+        is_det = method == "Detection"
+        is_seg = method == "Segmentation"
+        self.det_model_combo.setEnabled(is_det)
+        self.det_model_label.setEnabled(is_det)
+        self.det_model_custom_input.setEnabled(is_det and self.det_model_combo.currentText() == "custom")
+        self.seg_model_combo.setEnabled(is_seg)
+        self.seg_model_label.setEnabled(is_seg)
+        need_nnunet = is_seg and self.seg_model_combo.currentText() == "nnUNetv2"
+        self.nnunet_path_input.setEnabled(need_nnunet)
+        self.nnunet_path_label.setEnabled(need_nnunet)
+        self.nnunet_path_browse.setEnabled(need_nnunet)
+        if not need_nnunet:
+            self.nnunet_model_path = None
+
+    def on_det_model_changed(self, det_model):
+        need_custom = det_model == "custom"
+        self.det_model_custom_input.setEnabled(need_custom)
+        if not need_custom:
+            self.det_model_custom_input.clear()
 
     def on_double_viewer_toggled(self, checked):
         self.path_label.setEnabled(checked)
@@ -344,12 +407,36 @@ class PatientInputDialog(QDialog):
                 self.path_input.setText(file_path)
                 self.double_path = file_path
 
+    def browse_nnunet_path(self):
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select nnUNetv2 model folder",
+            "",
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+        )
+        if folder:
+            self.nnunet_path_input.setText(folder)
+            self.nnunet_model_path = folder
+
     def get_settings(self):
         self.mode = self.mode_combo.currentText()
         if self.mode == "manual":
             self.method = None
         else:
             self.method = self.method_combo.currentText()
+
+        self.det_model = self.det_model_combo.currentText()
+        if self.det_model == "custom":
+            custom_name = self.det_model_custom_input.text().strip()
+            if custom_name:
+                self.det_model = custom_name
+            else:
+                self.det_model = "custom"
+        self.seg_model = self.seg_model_combo.currentText()
+        if self.seg_model == "nnUNetv2":
+            self.nnunet_model_path = self.nnunet_path_input.text().strip() or None
+        else:
+            self.nnunet_model_path = None
 
         self.preprocess = self.preprocess_checkbox.isChecked()
         self.use_double_viewer = self.double_viewer_checkbox.isChecked()
@@ -362,6 +449,9 @@ class PatientInputDialog(QDialog):
             "mode": self.mode,
             "method": self.method,
             "preprocess": self.preprocess,
+            "det_model": self.det_model,
+            "seg_model": self.seg_model,
+            "nnunet_model_path": self.nnunet_model_path,
             "use_double_viewer": self.use_double_viewer,
             "double_path": self.double_path,
         }
