@@ -19,8 +19,8 @@ def auto_segmentation(
 ):
     """Perform auto-segmentation.
 
-    det_model/seg_model은 UI에서 선택한 모델명을 전달한다. 현재 det_model은 SAM2 기반 흐름을 사용하고,
-    seg_model이 "nnUNetv2"이면 nnUNetv2 추론을 통해 바로 마스크를 생성해 보여준다.
+    det_model/seg_model are chosen from the UI. The current det_model uses the SAM2 flow.
+    If seg_model == "nnUNetv2", run nnUNetv2 inference directly to show masks.
     """
     net.eval()
     results = []

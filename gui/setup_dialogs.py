@@ -236,7 +236,7 @@ class PatientInputDialog(QDialog):
         self.det_model_combo.addItems(["sam2_det", "custom"])
         self.det_model_combo.currentTextChanged.connect(self.on_det_model_changed)
         self.det_model_custom_input = QLineEdit()
-        self.det_model_custom_input.setPlaceholderText("입력: 커스텀 detection 모델 이름")
+        self.det_model_custom_input.setPlaceholderText("Enter custom detection model name")
         layout.addWidget(self.det_model_label)
         layout.addWidget(self.det_model_combo)
         layout.addWidget(self.det_model_custom_input)
@@ -249,7 +249,7 @@ class PatientInputDialog(QDialog):
         layout.addWidget(self.seg_model_label)
         layout.addWidget(self.seg_model_combo)
 
-        self.nnunet_path_label = QLabel("nnUNetv2 모델 폴더:")
+        self.nnunet_path_label = QLabel("nnUNetv2 model folder:")
         self.nnunet_path_input = QLineEdit()
         self.nnunet_path_input.setPlaceholderText("/path/to/nnunetv2_model")
         self.nnunet_path_browse = QPushButton("Browse")
