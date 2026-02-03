@@ -113,6 +113,15 @@ class MedSAM2NapariGUI(QWidget):
         self.user_box_layer.editable = False
         self.manual_edit_enabled = False  # allow freehand label/box editing on demand
         self.active_tool = None  # track current prompt/edit tool for toggling
+        self.mask_history = deque()
+        self.mask_redo_stack = deque()
+        self._manual_stroke_active = False
+        self._stroke_start_state = None
+        try:
+            self._last_mask_state = self.mask_layer.data.copy()
+            self._push_mask_history(self._last_mask_state.copy())
+        except Exception:
+            self._last_mask_state = None
         # Button references for visual states
         self.btn_add_pos = None
         self.btn_add_neg = None
@@ -173,15 +182,54 @@ class MedSAM2NapariGUI(QWidget):
                 return
             self._sync_user_points_from_layer()
 
-        @self.mask_layer.events.data.connect
-        def on_mask_data_change(event=None):
+        def _on_mask_change(event=None):
             if not getattr(self, 'manual_edit_enabled', False):
+                return
+            if getattr(self, '_manual_stroke_active', False):
                 return
             if getattr(self, '_updating_layers', False):
                 return
+            try:
+                current = self.mask_layer.data.copy()
+                if self._last_mask_state is not None:
+                    if not np.array_equal(current, self._last_mask_state):
+                        self._push_mask_history(self._last_mask_state.copy())
+                        self.mask_redo_stack.clear()
+                self._last_mask_state = current
+            except Exception:
+                pass
             if self.metrics and self.metrics.is_active():
                 self.metrics.inc_counter('manual_edit_strokes', 1)
                 self.metrics.add_event('manual_edit_stroke', frame=int(self.frame_idx))
+
+        for _evt in ('data', 'set_data'):
+            try:
+                getattr(self.mask_layer.events, _evt).connect(_on_mask_change)
+            except Exception:
+                pass
+
+    def _manual_edit_stroke_callback(self, layer, event):
+        if not getattr(self, 'manual_edit_enabled', False):
+            return
+        if getattr(self, '_updating_layers', False):
+            return
+        self._manual_stroke_active = True
+        try:
+            self._stroke_start_state = self.mask_layer.data.copy()
+        except Exception:
+            self._stroke_start_state = None
+        yield
+        try:
+            new_state = self.mask_layer.data.copy()
+            if self._stroke_start_state is not None and not np.array_equal(new_state, self._stroke_start_state):
+                self._push_mask_history(self._stroke_start_state.copy())
+                self.mask_redo_stack.clear()
+            self._last_mask_state = new_state
+        except Exception:
+            pass
+        finally:
+            self._manual_stroke_active = False
+            self._stroke_start_state = None
         
         self._setup_box_editing_events()
 
@@ -598,9 +646,12 @@ class MedSAM2NapariGUI(QWidget):
             ('Edit User Boxes', self.toggle_edit_user_boxes, 'btn_edit_boxes'),
             ('Toggle Object IDs', self.toggle_text_visibility, None),
             ('Propagate', self.propagate_prompt, None),
+            ('Slice Propagate', self.slicewise_propagate_prompt, None),
             ('3D Volume Render', lambda: render_auto_volume(self), None),
-            ('Undo', self.prompt_undo, None),
-            ('Redo', self.prompt_redo, None),
+            ('Prompt Undo', self.prompt_undo, None),
+            ('Prompt Redo', self.prompt_redo, None),
+            ('Mask Undo', self.mask_undo, None),
+            ('Mask Redo', self.mask_redo, None),
             ('Save', lambda: save_masks_auto(self), None)
         ]
         for lbl, fn, attr in btns:
@@ -647,9 +698,13 @@ class MedSAM2NapariGUI(QWidget):
         self.viewer.bind_key('s', lambda v: save_masks_auto(self))
         self.viewer.bind_key('Control-Z', lambda v: self.prompt_undo())
         self.viewer.bind_key('Control-Y', lambda v: self.prompt_redo())
+        self.viewer.bind_key('Control-X', lambda v: self.mask_undo())
+        self.viewer.bind_key('Control-U', lambda v: self.mask_redo())
         self.viewer.bind_key('Control-S', lambda v: save_masks_auto(self))
         self.viewer.bind_key('Ctrl+Z', lambda v: self.prompt_undo())
         self.viewer.bind_key('Ctrl+Y', lambda v: self.prompt_redo())
+        self.viewer.bind_key('Ctrl+X', lambda v: self.mask_undo())
+        self.viewer.bind_key('Ctrl+U', lambda v: self.mask_redo())
         self.viewer.bind_key('Ctrl+S', lambda v: save_masks_auto(self))
         if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
             self.viewer.bind_key('n', lambda v: self.next_patient(), overwrite=True)
@@ -660,6 +715,8 @@ class MedSAM2NapariGUI(QWidget):
         for seq, handler in [
             ('Ctrl+Z', self.prompt_undo),
             ('Ctrl+Y', self.prompt_redo),
+            ('Ctrl+X', self.mask_undo),
+            ('Ctrl+U', self.mask_redo),
             ('Ctrl+S', lambda: save_masks_auto(self)),
             ('Z', self.toggle_edit_user_boxes),
             ('z', self.toggle_edit_user_boxes),
@@ -703,6 +760,52 @@ class MedSAM2NapariGUI(QWidget):
             self.viewer.status = f"Mask opacity: {self.mask_layer.opacity:.2f}"
         except Exception:
             pass
+
+    def _ensure_box_prompt(self, frame_idx, obj_id):
+        # If no box prompt exists for this frame/obj, try to build one from current mask logits
+        try:
+            if frame_idx in self.box_prompts and obj_id in self.box_prompts[frame_idx]:
+                return False
+            if frame_idx not in self.video_segments:
+                return False
+            if obj_id not in self.video_segments[frame_idx]:
+                return False
+            logits = self.video_segments[frame_idx][obj_id]
+            if isinstance(logits, torch.Tensor):
+                mask = (logits.sigmoid() > 0.5).cpu().numpy()
+            else:
+                mask = (logits > 0.5)
+            if mask.ndim == 3 and mask.shape[0] == 1:
+                mask = mask[0]
+            coords = np.argwhere(mask)
+            if coords.size == 0:
+                return False
+            y_min, x_min = coords[:,0].min(), coords[:,1].min()
+            y_max, x_max = coords[:,0].max(), coords[:,1].max()
+            if frame_idx not in self.box_prompts:
+                self.box_prompts[frame_idx] = {}
+            self.box_prompts[frame_idx][obj_id] = [int(x_min), int(y_min), int(x_max), int(y_max)]
+            return True
+        except Exception as e:
+            print(f"Auto box generation failed for frame {frame_idx}, obj {obj_id}: {e}")
+            return False
+
+    def _push_mask_history(self, snapshot):
+        MAX_LEN = 20
+        self.mask_history.append(snapshot)
+        while len(self.mask_history) > MAX_LEN:
+            self.mask_history.popleft()
+
+    def _set_mask_data(self, new_data, record_history=True):
+        try:
+            if record_history and self._last_mask_state is not None:
+                self._push_mask_history(self._last_mask_state.copy())
+                self.mask_redo_stack.clear()
+            self._updating_layers = True
+            self.mask_layer.data = new_data
+            self._last_mask_state = self.mask_layer.data.copy()
+        finally:
+            self._updating_layers = False
 
     def _bump_mask_opacity(self, delta):
         try:
@@ -865,6 +968,18 @@ class MedSAM2NapariGUI(QWidget):
             print("Manual annotation enabled: paint on 'Mask' layer or draw rectangles in 'User Boxes'.")
             if self.metrics and self.metrics.is_active():
                 self.manual_edit_started_at = time.time()
+            try:
+                if self._manual_edit_stroke_callback not in self.mask_layer.mouse_drag_callbacks:
+                    self.mask_layer.mouse_drag_callbacks.append(self._manual_edit_stroke_callback)
+            except Exception:
+                pass
+            try:
+                current = self.mask_layer.data.copy()
+                self._push_mask_history(current)
+                self.mask_redo_stack.clear()
+                self._last_mask_state = current
+            except Exception:
+                pass
         else:
             self.img_layer.mouse_drag_callbacks.clear()
             self.mask_layer.mouse_drag_callbacks.clear()
@@ -1166,12 +1281,12 @@ class MedSAM2NapariGUI(QWidget):
                 self.metrics.add_event('propagation_error', message=str(e))
             QMessageBox.critical(self, 'Propagation Error', f'Propagation failed: {e}')
             return
-        self.mask_layer.data = make_initial_label_stack(
+        self._set_mask_data(make_initial_label_stack(
             video_segments=self.video_segments,
             obj_ids=self.obj_ids,
             n_frames=self.n_frames,
             spatial_shape=self.imgs.shape[2:],
-        )
+        ))
         self.update_text_layer()
         print(f'Propagation done for frames {start_idx}-{end_idx}')
         if self.metrics and self.metrics.is_active():
@@ -1192,6 +1307,140 @@ class MedSAM2NapariGUI(QWidget):
             )
             self.metrics.add_event('propagation_completed', frames_with_masks=len(propagated_frames))
 
+    def slicewise_propagate_prompt(self):
+        prop_start = time.time()
+        prompt_frames = set(self.point_prompts.keys()) | set(self.box_prompts.keys())
+        if not prompt_frames:
+            QMessageBox.warning(self, 'No Prompts', 'Add some prompts first!')
+            return
+        updated_frames = set()
+        total_boxes = 0
+        total_pos = 0
+        total_neg = 0
+        orig_labels = self.mask_layer.data.copy()
+        prompt_modes = defaultdict(dict)  # frame_idx -> {obj_id: (has_pos, has_neg)}
+        for frame_idx in sorted(prompt_frames):
+            # auto-generate box if none and there are prompts
+            frame_points = self.point_prompts.get(frame_idx, {})
+            frame_boxes = self.box_prompts.get(frame_idx, {})
+            has_prompts = bool(frame_points) or bool(frame_boxes)
+            if has_prompts:
+                # ensure box for each obj with prompts; if none exist, generate from existing mask
+                obj_ids_to_cover = set(frame_points.keys()) | set(frame_boxes.keys())
+                if not obj_ids_to_cover:
+                    obj_ids_to_cover = {self.current_obj_id}
+                for oid in obj_ids_to_cover:
+                    self._ensure_box_prompt(frame_idx, oid)
+                    pts_list = frame_points.get(oid, [])
+                    has_pos = any(len(pt)>=3 and pt[2]==1 for pt in pts_list)
+                    has_neg = any(len(pt)>=3 and pt[2]==0 for pt in pts_list)
+                    prompt_modes[frame_idx][oid] = (has_pos, has_neg)
+            frame_boxes = self.box_prompts.get(frame_idx, {})
+            frame_points = self.point_prompts.get(frame_idx, {})
+            if not frame_boxes and not frame_points:
+                continue
+            sub_imgs = self.imgs[frame_idx:frame_idx+1].to(self.device)
+            try:
+                with torch.no_grad():
+                    state = self.net.val_init_state(imgs_tensor=sub_imgs)
+                    for oid, box in frame_boxes.items():
+                        if isinstance(box, torch.Tensor):
+                            box_tensor = box.to(self.device)
+                        else:
+                            box_tensor = torch.tensor(box, device=self.device)
+                        self.net.train_add_new_bbox(
+                            inference_state=state,
+                            frame_idx=0,
+                            obj_id=oid,
+                            bbox=box_tensor,
+                            clear_old_points=False
+                        )
+                        total_boxes += 1
+                    for oid, pts_list in frame_points.items():
+                        if not pts_list:
+                            continue
+                        points = []
+                        labels = []
+                        for pt_info in pts_list:
+                            if len(pt_info) >= 3:
+                                x, y, label = pt_info[:3]
+                                points.append([x, y])
+                                labels.append(label)
+                                if label == 1:
+                                    total_pos += 1
+                                else:
+                                    total_neg += 1
+                        if points:
+                            points_tensor = torch.tensor(points, device=self.device)
+                            labels_tensor = torch.tensor(labels, dtype=torch.long, device=self.device)
+                            self.net.train_add_new_points(
+                                inference_state=state,
+                                frame_idx=0,
+                                obj_id=oid,
+                                points=points_tensor,
+                                labels=labels_tensor,
+                                clear_old_points=False
+                            )
+                    # mark prompts for boxes without points
+                    for oid in frame_boxes.keys():
+                        if oid not in prompt_modes[frame_idx]:
+                            prompt_modes[frame_idx][oid] = (False, False)
+                    for out_local_idx, out_oids, out_logits in self.net.propagate_in_video(state, start_frame_idx=0):
+                        global_idx = frame_idx
+                        self.video_segments[global_idx] = {
+                            oid: logits.cpu()
+                            for oid, logits in zip(out_oids, out_logits)
+                        }
+                        updated_frames.add(global_idx)
+                    self.net.reset_state(state)
+            except Exception as e:
+                if self.metrics and self.metrics.is_active():
+                    self.metrics.add_event('propagation_error_slice', message=str(e), frame=int(frame_idx))
+                QMessageBox.critical(self, 'Slice Propagation Error', f'Propagation failed at frame {frame_idx}: {e}')
+                return
+
+        if updated_frames:
+            new_labels = orig_labels.copy()
+            for fidx in updated_frames:
+                frame_seg = new_labels[fidx].copy()
+                for oid, (has_pos, has_neg) in prompt_modes.get(fidx, {}).items():
+                    if fidx not in self.video_segments or oid not in self.video_segments[fidx]:
+                        continue
+                    logits = self.video_segments[fidx][oid]
+                    if isinstance(logits, torch.Tensor):
+                        mask_new = (logits.sigmoid() > 0.5).cpu().numpy()
+                    else:
+                        mask_new = (logits > 0.5)
+                    if mask_new.ndim == 3 and mask_new.shape[0] == 1:
+                        mask_new = mask_new[0]
+                    mask_orig = (orig_labels[fidx] == oid)
+                    if has_pos and has_neg:
+                        mask_final = mask_new
+                    elif has_pos:
+                        mask_final = mask_orig | (mask_new & ~mask_orig)
+                    elif has_neg:
+                        mask_final = mask_orig & mask_new
+                    else:
+                        mask_final = mask_new
+                    # clear old obj pixels then apply final
+                    frame_seg[frame_seg == oid] = 0
+                    frame_seg[mask_final.astype(bool)] = oid
+                new_labels[fidx] = frame_seg
+            self._set_mask_data(new_labels)
+            self.update_text_layer()
+        if self.metrics and self.metrics.is_active():
+            end_ts = time.time()
+            self.metrics.record_stage(
+                'propagation_auto_slicewise',
+                prop_start,
+                end_ts,
+                frames_with_masks=len(updated_frames),
+                boxes_used=total_boxes,
+                pos_points_used=total_pos,
+                neg_points_used=total_neg,
+            )
+            self.metrics.add_event('propagation_completed_slicewise', frames_with_masks=len(updated_frames))
+
     def on_frame_change(self, val):
         self.frame_idx = val
         current_step = list(self.viewer.dims.current_step)
@@ -1210,3 +1459,29 @@ class MedSAM2NapariGUI(QWidget):
 
     def render_3d_volume(self):
         render_auto_volume(self)
+
+    def mask_undo(self):
+        if not self.mask_history:
+            return
+        try:
+            current = self.mask_layer.data.copy()
+            prev = self.mask_history.pop()
+            self.mask_redo_stack.append(current)
+            self._updating_layers = True
+            self.mask_layer.data = prev
+            self._last_mask_state = self.mask_layer.data.copy()
+        finally:
+            self._updating_layers = False
+
+    def mask_redo(self):
+        if not self.mask_redo_stack:
+            return
+        try:
+            current = self.mask_layer.data.copy()
+            nxt = self.mask_redo_stack.pop()
+            self._push_mask_history(current)
+            self._updating_layers = True
+            self.mask_layer.data = nxt
+            self._last_mask_state = self.mask_layer.data.copy()
+        finally:
+            self._updating_layers = False

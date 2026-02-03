@@ -1,13 +1,27 @@
 """Auto segmentation helper."""
 import time
+import numpy as np
 import torch
 from typing import Optional
 
 from gui.metrics import UsageMetricsRecorder
 
 
-def auto_segmentation(pack, net, device, method='det', metrics: Optional[UsageMetricsRecorder] = None):
-    """Perform auto-segmentation using MedSAM2 network from pack data."""
+def auto_segmentation(
+    pack,
+    net,
+    device,
+    method='det',
+    det_model='sam2_det',
+    seg_model='sam2_seg',
+    nnunet_model_path=None,
+    metrics: Optional[UsageMetricsRecorder] = None,
+):
+    """Perform auto-segmentation.
+
+    det_model/seg_model은 UI에서 선택한 모델명을 전달한다. 현재 det_model은 SAM2 기반 흐름을 사용하고,
+    seg_model이 "nnUNetv2"이면 nnUNetv2 추론을 통해 바로 마스크를 생성해 보여준다.
+    """
     net.eval()
     results = []
 
@@ -65,63 +79,99 @@ def auto_segmentation(pack, net, device, method='det', metrics: Optional[UsageMe
                 "box_prompts": box_prompts,
                 "start_idx": start_idx,
                 "end_idx": end_idx,
-                "meta": meta
+                "meta": meta,
+                "det_model": det_model,
             })
 
         elif method == 'seg':
-            prompts = pack['prompts']
-            valid_slices = [s for s, objs in prompts.items() if objs]
-            if not valid_slices:
+            # seg_model == 'sam2_seg' -> 기존 SAM2 전파 흐름 유지
+            if seg_model == 'nnUNetv2':
+                from gui.nnunetv2_inference import run_nnunetv2_inference
+
+                seg_mask = run_nnunetv2_inference(
+                    imgs=imgs,
+                    meta=meta,
+                    model_path=nnunet_model_path,
+                    device=device,
+                )
+                # seg_mask: (Z, H, W) with integer labels
+                start_idx, end_idx = 0, seg_mask.shape[0] - 1
+                obj_ids = sorted(int(x) for x in np.unique(seg_mask) if x != 0)
+                for z in range(seg_mask.shape[0]):
+                    slice_map = seg_mask[z]
+                    per_obj = {}
+                    for oid in obj_ids:
+                        mask = (slice_map == oid).astype(np.float32)
+                        if mask.any():
+                            per_obj[oid] = torch.from_numpy(mask)
+                    if per_obj:
+                        video_segments[z] = per_obj
                 results.append({
                     "patient_id": patient_id,
                     "imgs": imgs.cpu(),
-                    "video_segments": {},
-                    "prompts": {}
+                    "video_segments": video_segments,
+                    "prompts": {},
+                    "start_idx": start_idx,
+                    "end_idx": end_idx,
+                    "meta": meta,
+                    "seg_model": seg_model,
                 })
-            start_idx, end_idx = min(valid_slices), max(valid_slices)
-            sel_prompts = {s: prompts[s] for s in valid_slices if start_idx <= s <= end_idx}
-            sub_imgs = imgs[start_idx:end_idx + 1]
-            state = net.val_init_state(imgs_tensor=sub_imgs)
-            for frame_idx, objs in sel_prompts.items():
-                local_idx = frame_idx - start_idx
-                for oid, prm in objs.items():
-                    if 'bboxes' in prm and prm['bboxes'] is not None:
-                        bbox = torch.tensor(prm['bboxes'], device=device)
-                        net.train_add_new_bbox(
-                            inference_state=state,
-                            frame_idx=local_idx,
-                            obj_id=oid,
-                            bbox=bbox,
-                            clear_old_points=False
-                        )
-                    if 'points' in prm and prm['points'] is not None:
-                        points_data = prm['points']
-                        if isinstance(points_data[0], (list, tuple)) and len(points_data[0]) >= 2:
-                            coords = [[pt[0], pt[1]] for pt in points_data]
-                            labels = [pt[2] if len(pt) > 2 else 1 for pt in points_data]
-                            points_tensor = torch.tensor(coords, device=device)
-                            labels_tensor = torch.tensor(labels, dtype=torch.long, device=device)
-                            net.train_add_new_points(
+            else:
+                prompts = pack['prompts']
+                valid_slices = [s for s, objs in prompts.items() if objs]
+                if not valid_slices:
+                    results.append({
+                        "patient_id": patient_id,
+                        "imgs": imgs.cpu(),
+                        "video_segments": {},
+                        "prompts": {},
+                        "seg_model": seg_model,
+                    })
+                start_idx, end_idx = min(valid_slices), max(valid_slices)
+                sel_prompts = {s: prompts[s] for s in valid_slices if start_idx <= s <= end_idx}
+                sub_imgs = imgs[start_idx:end_idx + 1]
+                state = net.val_init_state(imgs_tensor=sub_imgs)
+                for frame_idx, objs in sel_prompts.items():
+                    local_idx = frame_idx - start_idx
+                    for oid, prm in objs.items():
+                        if 'bboxes' in prm and prm['bboxes'] is not None:
+                            bbox = torch.tensor(prm['bboxes'], device=device)
+                            net.train_add_new_bbox(
                                 inference_state=state,
                                 frame_idx=local_idx,
                                 obj_id=oid,
-                                points=points_tensor,
-                                labels=labels_tensor,
+                                bbox=bbox,
                                 clear_old_points=False
                             )
-            for out_local_idx, out_oids, out_logits in net.propagate_in_video(state, start_frame_idx=0):
-                global_idx = start_idx + out_local_idx
-                video_segments[global_idx] = {oid: mask.cpu() for oid, mask in zip(out_oids, out_logits)}
-            net.reset_state(state)
-            results.append({
-                "patient_id": patient_id,
-                "imgs": imgs.cpu(),
-                "video_segments": video_segments,
-                "prompts": sel_prompts,
-                "start_idx": start_idx,
-                "end_idx": end_idx,
-                "meta": meta
-            })
+                        if 'points' in prm and prm['points'] is not None:
+                            points_data = prm['points']
+                            if isinstance(points_data[0], (list, tuple)) and len(points_data[0]) >= 2:
+                                coords = [[pt[0], pt[1]] for pt in points_data]
+                                labels = [pt[2] if len(pt) > 2 else 1 for pt in points_data]
+                                points_tensor = torch.tensor(coords, device=device)
+                                labels_tensor = torch.tensor(labels, dtype=torch.long, device=device)
+                                net.train_add_new_points(
+                                    inference_state=state,
+                                    frame_idx=local_idx,
+                                    obj_id=oid,
+                                    points=points_tensor,
+                                    labels=labels_tensor,
+                                    clear_old_points=False
+                                )
+                for out_local_idx, out_oids, out_logits in net.propagate_in_video(state, start_frame_idx=0):
+                    global_idx = start_idx + out_local_idx
+                    video_segments[global_idx] = {oid: mask.cpu() for oid, mask in zip(out_oids, out_logits)}
+                net.reset_state(state)
+                results.append({
+                    "patient_id": patient_id,
+                    "imgs": imgs.cpu(),
+                    "video_segments": video_segments,
+                    "prompts": sel_prompts,
+                    "start_idx": start_idx,
+                    "end_idx": end_idx,
+                    "meta": meta,
+                    "seg_model": seg_model,
+                })
         else:
             raise ValueError(f"Unsupported method: {method}")
 

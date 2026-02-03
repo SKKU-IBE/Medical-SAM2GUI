@@ -71,12 +71,24 @@ class ManualPromptNapariGUI(QWidget):
             pass
         self.box_layer = self.viewer.add_shapes(
             np.empty((0,4,3)), name='User Boxes correction layer', shape_type='rectangle',
-            edge_color='red', face_color=[0,0,0,0]
+            edge_color='red', face_color=[0,0,0,0], ndim=3
         )
         self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))
-        self._attach_mode_guard(self.box_layer, allowed_modes=('select', 'pan_zoom'))
+        # allow select/pan and add_rectangle so drag-to-add works
+        self._attach_mode_guard(self.box_layer, allowed_modes=('select', 'pan_zoom', 'add_rectangle'))
         self.manual_edit_enabled = False  # allow napari painting/box drawing when toggled
         self.active_tool = None  # track current prompt/edit tool for toggling
+        self.mask_history = deque()
+        self.mask_redo_stack = deque()
+        self._manual_stroke_active = False
+        self._stroke_start_state = None
+        self._suppress_box_history = False
+        try:
+            self._last_mask_state = self.mask_layer.data.copy()
+            # Seed history so the first undo returns to the initial mask state
+            self._push_mask_history(self._last_mask_state.copy())
+        except Exception:
+            self._last_mask_state = None
         # Button references for visual states
         self.btn_add_pos = None
         self.btn_add_neg = None
@@ -133,15 +145,55 @@ class ManualPromptNapariGUI(QWidget):
             self._sync_points_from_layer()
         self._setup_manual_box_editing_events()
 
-        @self.mask_layer.events.data.connect
-        def on_mask_data_change(event=None):
+        def _on_mask_change(event=None):
             if not getattr(self, 'manual_edit_enabled', False):
+                return
+            if getattr(self, '_manual_stroke_active', False):
                 return
             if getattr(self, '_updating_layers', False):
                 return
+            try:
+                current = self.mask_layer.data.copy()
+                if self._last_mask_state is not None:
+                    # Only push when data actually changed
+                    if not np.array_equal(current, self._last_mask_state):
+                        self._push_mask_history(self._last_mask_state.copy())
+                        self.mask_redo_stack.clear()
+                self._last_mask_state = current
+            except Exception:
+                pass
             if self.metrics and self.metrics.is_active():
                 self.metrics.inc_counter('manual_edit_strokes', 1)
                 self.metrics.add_event('manual_edit_stroke', frame=int(self.frame_idx))
+
+        for _evt in ('data', 'set_data'):
+            try:
+                getattr(self.mask_layer.events, _evt).connect(_on_mask_change)
+            except Exception:
+                pass
+
+    def _manual_edit_stroke_callback(self, layer, event):
+        if not getattr(self, 'manual_edit_enabled', False):
+            return
+        if getattr(self, '_updating_layers', False):
+            return
+        self._manual_stroke_active = True
+        try:
+            self._stroke_start_state = self.mask_layer.data.copy()
+        except Exception:
+            self._stroke_start_state = None
+        yield
+        try:
+            new_state = self.mask_layer.data.copy()
+            if self._stroke_start_state is not None and not np.array_equal(new_state, self._stroke_start_state):
+                self._push_mask_history(self._stroke_start_state.copy())
+                self.mask_redo_stack.clear()
+            self._last_mask_state = new_state
+        except Exception:
+            pass
+        finally:
+            self._manual_stroke_active = False
+            self._stroke_start_state = None
 
     def _select_layer(self, layer):
         try:
@@ -164,12 +216,23 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
 
+    def _focus_mask_and_box_layers(self):
+        # Make sure the mask/box layer is selected and visible while adding boxes
+        try:
+            self.mask_layer.visible = True
+            self.box_layer.visible = True
+        except Exception:
+            pass
+        self._select_layer(self.mask_layer)
+
     def _bind_shortcuts(self):
         keymap = [
             ('h', self.enable_add_positive),
             ('j', self.enable_add_negative),
+            ('r', self.enable_add_box),
             ('q', self.toggle_manual_annotation),
             ('k', self.enable_edit_points),
+            ('t', self.enable_edit_boxes),
             ('c', self.clear_all_prompts),
             ('y', lambda: self._set_mask_opacity(0.0)),
             ('o', lambda: self._set_mask_opacity(1.0)),
@@ -182,9 +245,13 @@ class ManualPromptNapariGUI(QWidget):
         self.viewer.bind_key('s', lambda v: self.save_masks(), overwrite=True)
         self.viewer.bind_key('Control-Z', lambda v: self.prompt_undo(), overwrite=True)
         self.viewer.bind_key('Control-Y', lambda v: self.prompt_redo(), overwrite=True)
+        self.viewer.bind_key('Control-X', lambda v: self.mask_undo(), overwrite=True)
+        self.viewer.bind_key('Control-U', lambda v: self.mask_redo(), overwrite=True)
         self.viewer.bind_key('Control-S', lambda v: self.save_masks(), overwrite=True)
         self.viewer.bind_key('Ctrl+Z', lambda v: self.prompt_undo(), overwrite=True)
         self.viewer.bind_key('Ctrl+Y', lambda v: self.prompt_redo(), overwrite=True)
+        self.viewer.bind_key('Ctrl+X', lambda v: self.mask_undo(), overwrite=True)
+        self.viewer.bind_key('Ctrl+U', lambda v: self.mask_redo(), overwrite=True)
         self.viewer.bind_key('Ctrl+S', lambda v: self.save_masks(), overwrite=True)
         if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
             self.viewer.bind_key('n', lambda v: self.next_patient(), overwrite=True)
@@ -195,7 +262,11 @@ class ManualPromptNapariGUI(QWidget):
         for seq, handler in [
             ('Ctrl+Z', self.prompt_undo),
             ('Ctrl+Y', self.prompt_redo),
+            ('Ctrl+X', self.mask_undo),
+            ('Ctrl+U', self.mask_redo),
             ('Ctrl+S', self.save_masks),
+            ('R', self.enable_add_box),
+            ('T', self.enable_edit_boxes),
             ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
         ]:
             if handler:
@@ -237,6 +308,23 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
 
+    def _push_mask_history(self, snapshot):
+        MAX_LEN = 20
+        self.mask_history.append(snapshot)
+        while len(self.mask_history) > MAX_LEN:
+            self.mask_history.popleft()
+
+    def _set_mask_data(self, new_data, record_history=True):
+        try:
+            if record_history and self._last_mask_state is not None:
+                self._push_mask_history(self._last_mask_state.copy())
+                self.mask_redo_stack.clear()
+            self._updating_layers = True
+            self.mask_layer.data = new_data
+            self._last_mask_state = self.mask_layer.data.copy()
+        finally:
+            self._updating_layers = False
+
     def _bump_mask_opacity(self, delta):
         try:
             new_opacity = float(np.clip(self.mask_layer.opacity + delta, 0.0, 1.0))
@@ -251,14 +339,21 @@ class ManualPromptNapariGUI(QWidget):
         def on_boxes_data_change():
             if not hasattr(self, 'box_layer') or not self.box_layer.editable:
                 return
+            if getattr(self, '_suppress_box_history', False):
+                return
             if getattr(self, '_updating_layers', False):
                 return
             if self._box_edit_timer:
                 self._box_edit_timer.cancel()
-            self._box_edit_timer = threading.Timer(0.5, self._sync_manual_boxes_with_rectangle_constraint)
+            self._box_edit_timer = threading.Timer(0.3, lambda: self._sync_manual_boxes_with_rectangle_constraint(record_history=True))
             self._box_edit_timer.start()
+        # store last known box prompts to detect manual edits even when constraints unchanged
+        try:
+            self._last_box_prompts_snapshot = list(self.box_prompts)
+        except Exception:
+            self._last_box_prompts_snapshot = []
 
-    def _sync_manual_boxes_with_rectangle_constraint(self):
+    def _sync_manual_boxes_with_rectangle_constraint(self, record_history=False):
         if getattr(self, '_updating_layers', False) or not self.box_layer.editable:
             return
         try:
@@ -287,18 +382,21 @@ class ManualPromptNapariGUI(QWidget):
                     [frame, max_y, min_x]
                 ])
                 updated_boxes.append(rect_box)
-            if not all(np.array_equal(new, old) for new, old in zip(updated_boxes, current_boxes)):
+            changed = not all(np.array_equal(new, old) for new, old in zip(updated_boxes, current_boxes))
+            if changed:
                 print(f"Applying rectangle constraint to {len(updated_boxes)} manual boxes")
                 self.box_layer.data = updated_boxes
         except Exception as e:
             print(f"Error in manual box rectangle constraint: {e}")
         finally:
             self._updating_layers = False
+        # sync prompts and record history if requested
+        self._sync_boxes_from_layer(record_history=record_history)
 
-    def _sync_boxes_from_layer(self):
+    def _sync_boxes_from_layer(self, record_history=False):
         if getattr(self, '_updating_layers', False) or not self.box_layer.editable:
             return
-        old_boxes = self.box_prompts.copy()
+        old_boxes = list(self.box_prompts)
         self.box_prompts.clear()
         if len(self.box_layer.data) > 0:
             for corners in self.box_layer.data:
@@ -322,6 +420,10 @@ class ManualPromptNapariGUI(QWidget):
                         best_obj_id = self.current_obj_id
                     self.box_prompts.append((frame_idx, best_obj_id, x1, y1, x2, y2))
                     print(f"  Frame {frame_idx}, ObjID {best_obj_id}: [{x1}, {y1}, {x2}, {y2}]")
+        if record_history and old_boxes != list(self.box_prompts):
+            # store previous state so undo restores it
+            self.prompt_history.append(('box_state', old_boxes))
+            self.redo_history.clear()
         print(f"Synced {len(self.box_prompts)} boxes")
 
     def _sync_points_from_layer(self):
@@ -413,8 +515,10 @@ class ManualPromptNapariGUI(QWidget):
             ('Clear All',   self.clear_all_prompts, None),
             ('Propagate',   self.propagate_prompt, None),
             ('3D Volume Render', lambda: render_manual_volume(self), None),
-            ('Undo',        self.prompt_undo, None),
-            ('Redo',        self.prompt_redo, None),
+            ('Prompt Undo', self.prompt_undo, None),
+            ('Prompt Redo', self.prompt_redo, None),
+            ('Mask Undo',   self.mask_undo, None),
+            ('Mask Redo',   self.mask_redo, None),
             ('Save Masks',  lambda: save_masks_manual(self), None)
         ]
         for label, func, attr in btns:
@@ -435,7 +539,7 @@ class ManualPromptNapariGUI(QWidget):
         self.box_prompts.clear()
         self.prompt_history.clear()
         self.redo_history.clear()
-        self.mask_layer.data = np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8)
+        self._set_mask_data(np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8))
         self.update_layers()
         print("All prompts and masks cleared")
         if self.metrics and self.metrics.is_active():
@@ -456,6 +560,10 @@ class ManualPromptNapariGUI(QWidget):
     def cancel_prompt_mode(self, viewer=None):
         self.img_layer.mouse_drag_callbacks.clear()
         self.mask_layer.mouse_drag_callbacks.clear()
+        try:
+            self.box_layer.mouse_drag_callbacks.clear()
+        except Exception:
+            pass
         if self.active_tool == 'edit_pts':
             self.user_pts_layer.editable = False
         if self.active_tool == 'edit_boxes':
@@ -527,27 +635,80 @@ class ManualPromptNapariGUI(QWidget):
             return
         if not self._activate_tool('add_box'):
             return
-        self._select_layer(self.mask_layer)
-        self.mask_layer.editable = True  # ensure drag callbacks fire on labels layer
+        self._focus_mask_and_box_layers()
+        self._select_layer(self.box_layer)
+        self.box_layer.editable = True
+        try:
+            self.box_layer.mode = 'add_rectangle'
+        except Exception:
+            pass
         self._set_button_active(self.btn_add_box, True)
         self.add_mode = 'box'
-        pts = []
+
+        temp_state = {
+            'active': False,
+            't': None,
+            'x0': None,
+            'y0': None,
+            'rect_idx': None,
+        }
+
         def cb(layer, event):
-            if event.type != 'mouse_press': return
-            t = int(self.viewer.dims.current_step[0])
-            y, x = map(int, event.position[1:])
-            pts.append((x, y))
-            if len(pts) == 2:
-                x1, y1 = pts[0]
-                x2, y2 = pts[1]
+            etype = getattr(event, 'type', None)
+            if etype == 'mouse_press':
+                temp_state['t'] = int(self.viewer.dims.current_step[0])
+                y0, x0 = map(int, event.position[1:])
+                temp_state['x0'], temp_state['y0'] = x0, y0
+                temp_state['active'] = True
+                temp_state['rect_idx'] = None
+                # clear redo stack on new user action
+                self.redo_history.clear()
+            elif etype == 'mouse_move' and temp_state['active']:
+                try:
+                    self.box_layer.mode = 'add_rectangle'
+                except Exception:
+                    pass
+                y1, x1 = map(int, event.position[1:])
+                x1, x2 = sorted([temp_state['x0'], x1])
+                y1, y2 = sorted([temp_state['y0'], y1])
+                rect = np.array([
+                    [temp_state['t'], y1, x1],
+                    [temp_state['t'], y1, x2],
+                    [temp_state['t'], y2, x2],
+                    [temp_state['t'], y2, x1],
+                ], dtype=float)
+                try:
+                    self._updating_layers = True
+                    if temp_state['rect_idx'] is None:
+                        self.box_layer.add_rectangles([rect])
+                        temp_state['rect_idx'] = len(self.box_layer.data) - 1
+                    else:
+                        data = list(self.box_layer.data)
+                        data[temp_state['rect_idx']] = rect
+                        self.box_layer.data = data
+                finally:
+                    self._updating_layers = False
+            elif etype == 'mouse_release' and temp_state['active']:
+                try:
+                    self.box_layer.mode = 'select'
+                except Exception:
+                    pass
+                y1, x1 = map(int, event.position[1:])
+                x1, x2 = sorted([temp_state['x0'], x1])
+                y1, y2 = sorted([temp_state['y0'], y1])
+                t = temp_state['t']
                 self.box_prompts.append((t, self.current_obj_id, x1, y1, x2, y2))
                 self.prompt_history.append(('box', t, self.current_obj_id, x1, y1, x2, y2))
-                self.redo_history.clear()
                 self.update_layers()
                 self._record_prompt_event('box', t, self.current_obj_id)
                 print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
-                pts.clear()
-        self.mask_layer.mouse_drag_callbacks.append(cb)
+                temp_state['active'] = False
+                temp_state['rect_idx'] = None
+                temp_state['t'] = None
+                temp_state['x0'] = None
+                temp_state['y0'] = None
+
+        self.box_layer.mouse_drag_callbacks.append(cb)
 
     def toggle_manual_annotation(self):
         # Enable napari's native painting/rectangle drawing without needing Add Box
@@ -568,6 +729,23 @@ class ManualPromptNapariGUI(QWidget):
             print("Manual annotation enabled: paint on 'mask, box layer' or draw rectangles in 'User Boxes correction layer'.")
             if self.metrics and self.metrics.is_active():
                 self.manual_edit_started_at = time.time()
+                try:
+                    # Ensure the stroke callback is attached only once
+                    if self._manual_edit_stroke_callback not in self.mask_layer.mouse_drag_callbacks:
+                        self.mask_layer.mouse_drag_callbacks.append(self._manual_edit_stroke_callback)
+                except Exception:
+                    pass
+            try:
+                current = self.mask_layer.data.copy()
+                self._push_mask_history(current)
+                self.mask_redo_stack.clear()
+                self._last_mask_state = current
+            except Exception:
+                pass
+            try:
+                self._last_mask_state = self.mask_layer.data.copy()
+            except Exception:
+                pass
         else:
             self.mask_layer.editable = False
             self.box_layer.editable = False
@@ -646,6 +824,8 @@ class ManualPromptNapariGUI(QWidget):
         print("Boxes editing enabled - rectangles will maintain shape during editing")
 
     def update_layers(self):
+        # Prevent box edits from recording history while we redraw from prompt state
+        self._suppress_box_history = True
         self._updating_layers = True
         pts, colors = [], []
         for t, oid, y, x in self.pos_points:
@@ -673,6 +853,10 @@ class ManualPromptNapariGUI(QWidget):
             n_shapes = len(shapes)
             self.box_layer.edge_color = ['red'] * n_shapes
             self.box_layer.face_color = [[0, 0, 0, 0]] * n_shapes
+            try:
+                self.box_layer.edge_width = 3
+            except Exception:
+                pass
         else:
             self.box_layer.data = np.empty((0, 4, 3), dtype=np.float64)
             empty_rgba = np.zeros((0, 4), dtype=float)
@@ -680,6 +864,7 @@ class ManualPromptNapariGUI(QWidget):
             self.box_layer.face_color = empty_rgba
         self._update_object_id_text()
         self._updating_layers = False
+        self._suppress_box_history = False
         print(f"Updated layers: {len(self.pos_points)} positive, {len(self.neg_points)} negative points, {len(self.box_prompts)} boxes")
 
     def _update_object_id_text(self):
@@ -750,13 +935,28 @@ class ManualPromptNapariGUI(QWidget):
             self.metrics.add_event('redo', action=act[0])
 
     def apply_prompt_history(self):
-        self.pos_points.clear(); self.neg_points.clear(); self.box_prompts.clear()
-        for it in self.prompt_history:
-            cmd, t, oid, *rest = it
-            if cmd == 'pos': y,x = rest; self.pos_points.append((t,oid,y,x))
-            elif cmd == 'neg': y,x = rest; self.neg_points.append((t,oid,y,x))
-            elif cmd == 'box': x1,y1,x2,y2 = rest; self.box_prompts.append((t,oid,x1,y1,x2,y2))
-        self.update_layers()
+        self._suppress_box_history = True
+        try:
+            self.pos_points.clear(); self.neg_points.clear(); self.box_prompts.clear()
+            for it in self.prompt_history:
+                if not it:
+                    continue
+                cmd = it[0]
+                if cmd == 'pos' and len(it) >= 4:
+                    _, t, oid, y, x = it
+                    self.pos_points.append((t, oid, y, x))
+                elif cmd == 'neg' and len(it) >= 4:
+                    _, t, oid, y, x = it
+                    self.neg_points.append((t, oid, y, x))
+                elif cmd == 'box' and len(it) >= 6:
+                    _, t, oid, x1, y1, x2, y2 = it
+                    self.box_prompts.append((t, oid, x1, y1, x2, y2))
+                elif cmd == 'box_state':
+                    snapshot = it[1] if len(it) > 1 else []
+                    self.box_prompts = list(snapshot)
+            self.update_layers()
+        finally:
+            self._suppress_box_history = False
 
     def propagate_prompt(self):
         print("Synchronizing layer data before propagate...")
@@ -773,7 +973,7 @@ class ManualPromptNapariGUI(QWidget):
             return
         start, end = min(idxs), max(idxs)
         print(f"Propagating from frame {start} to {end}...")
-        self.mask_layer.data = np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8)
+        self._set_mask_data(np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8))
         sub = self.imgs[start:end+1].to(self.device)
         with torch.no_grad():
             state = self.net.val_init_state(imgs_tensor=sub)
@@ -837,7 +1037,7 @@ class ManualPromptNapariGUI(QWidget):
             new_mask = np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8)
             for i, m in result.items():
                 new_mask[i] = m
-            self.mask_layer.data = new_mask
+            self._set_mask_data(new_mask)
             self._update_object_id_text()
             print(f"Propagation completed. Generated masks for {len(result)} frames")
             QMessageBox.information(self, 'Done', f'Propagated {start}~{end}\nGenerated {len(result)} masks')
@@ -864,3 +1064,29 @@ class ManualPromptNapariGUI(QWidget):
 
     def render_3d_volume(self):
         render_manual_volume(self)
+
+    def mask_undo(self):
+        if not self.mask_history:
+            return
+        try:
+            current = self.mask_layer.data.copy()
+            prev = self.mask_history.pop()
+            self.mask_redo_stack.append(current)
+            self._updating_layers = True
+            self.mask_layer.data = prev
+            self._last_mask_state = self.mask_layer.data.copy()
+        finally:
+            self._updating_layers = False
+
+    def mask_redo(self):
+        if not self.mask_redo_stack:
+            return
+        try:
+            current = self.mask_layer.data.copy()
+            nxt = self.mask_redo_stack.pop()
+            self._push_mask_history(current)
+            self._updating_layers = True
+            self.mask_layer.data = nxt
+            self._last_mask_state = self.mask_layer.data.copy()
+        finally:
+            self._updating_layers = False
