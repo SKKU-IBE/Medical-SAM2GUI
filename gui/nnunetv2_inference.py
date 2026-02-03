@@ -13,10 +13,10 @@ import torch
 
 def _ensure_model_path(path: Optional[str]) -> str:
     if path is None or not str(path).strip():
-        raise RuntimeError("nnUNetv2 모델 경로가 지정되지 않았습니다. Patient 설정에서 모델 폴더를 선택하세요.")
+        raise RuntimeError("nnUNetv2 model path is not set. Please select the model folder in Patient settings.")
     resolved = os.path.abspath(path)
     if not os.path.exists(resolved):
-        raise RuntimeError(f"nnUNetv2 모델 경로를 찾을 수 없습니다: {resolved}")
+        raise RuntimeError(f"nnUNetv2 model path not found: {resolved}")
     return resolved
 
 
@@ -48,7 +48,7 @@ def run_nnunetv2_inference(
         from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
     except Exception as exc:  # pragma: no cover - import error path
         raise RuntimeError(
-            "nnUNetv2 패키지가 설치되어 있지 않습니다. 'pip install nnunetv2' 후 다시 시도하세요."
+            "nnUNetv2 package is not installed. Run 'pip install nnunetv2' and try again."
         ) from exc
 
     # nnUNet expects (C, Z, Y, X)
@@ -59,7 +59,7 @@ def run_nnunetv2_inference(
         # [T, H, W] -> [1, T, H, W]
         np_vol = imgs.cpu().numpy()[None, ...]
     else:
-        raise RuntimeError(f"지원하지 않는 입력 차원입니다: {imgs.shape}")
+        raise RuntimeError(f"Unsupported input dimensions: {imgs.shape}")
 
     spacing = None
     if meta and isinstance(meta, dict):
@@ -92,13 +92,13 @@ def run_nnunetv2_inference(
             tiling=True,
         )
     except Exception as exc:  # pragma: no cover - runtime error path
-        raise RuntimeError(f"nnUNetv2 추론 중 오류가 발생했습니다: {exc}") from exc
+        raise RuntimeError(f"nnUNetv2 inference failed: {exc}") from exc
 
     if isinstance(seg, (list, tuple)):
         seg = seg[0]
     if seg.ndim == 4 and seg.shape[0] == 1:
         seg = seg[0]
     if seg.ndim != 3:
-        raise RuntimeError(f"nnUNetv2 출력 형태가 예상과 다릅니다: {seg.shape}")
+        raise RuntimeError(f"nnUNetv2 output shape unexpected: {seg.shape}")
 
     return seg.astype(np.int16)

@@ -578,7 +578,7 @@ class ManualPromptNapariGUI(QWidget):
     def _activate_tool(self, name):
         # Toggle off if the same tool is already active
         if self.manual_edit_enabled and name != 'manual_edit':
-            print("Manual Edit 활성화 중에는 다른 도구를 사용할 수 없습니다. Manual Edit을 끄세요.")
+            print("Manual Edit is active. Turn it off before using other tools.")
             return False
         if self.active_tool == name:
             self.cancel_prompt_mode()
@@ -589,7 +589,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def enable_add_positive(self):
         if self.manual_edit_enabled:
-            print("Manual Edit이 켜져 있어 점 추가를 사용할 수 없습니다.")
+            print("Manual Edit is active; point add is disabled.")
             return
         if not self._activate_tool('add_pos'):
             return
@@ -610,7 +610,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def enable_add_negative(self):
         if self.manual_edit_enabled:
-            print("Manual Edit이 켜져 있어 점 추가를 사용할 수 없습니다.")
+            print("Manual Edit is active; point add is disabled.")
             return
         if not self._activate_tool('add_neg'):
             return
@@ -631,7 +631,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def enable_add_box(self):
         if self.manual_edit_enabled:
-            print("Manual Edit이 켜져 있어 박스 추가를 사용할 수 없습니다.")
+            print("Manual Edit is active; box add is disabled.")
             return
         if not self._activate_tool('add_box'):
             return
@@ -777,7 +777,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def enable_edit_points(self):
         if self.manual_edit_enabled:
-            print("Manual Edit이 켜져 있어 포인트 편집을 사용할 수 없습니다.")
+            print("Manual Edit is active; point edit is disabled.")
             return
         if not self._activate_tool('edit_pts'):
             # toggled off
@@ -798,7 +798,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def enable_edit_boxes(self):
         if self.manual_edit_enabled:
-            print("Manual Edit이 켜져 있어 박스 편집을 사용할 수 없습니다.")
+            print("Manual Edit is active; box edit is disabled.")
             return
         if not self._activate_tool('edit_boxes'):
             # toggled off
