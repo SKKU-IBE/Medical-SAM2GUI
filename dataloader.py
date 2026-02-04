@@ -560,6 +560,9 @@ class SNU3DMRI_MedSAM2Dataset(Dataset):
             "patient": patient_name
         }
 
+        # Precompute raw volume for nnUNet (no resizing)
+        images_nnunet = torch.from_numpy(arr_3d.astype(np.float32))
+
         # 4. Branch by mode
         if self.mode == "manual":
             images = []
@@ -791,6 +794,7 @@ class SNU3DMRI_MedSAM2Dataset(Dataset):
             output = {
                 "meta": meta,
                 "images": torch.stack(images),  # [num_slices, 3, H, W]
+                "images_nnunet": images_nnunet,  # [num_slices, H, W]
             }
             if self.method in ["cls-det", "det"]:
                 output.update({

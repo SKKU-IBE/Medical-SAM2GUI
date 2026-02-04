@@ -54,13 +54,13 @@ class ManualPromptNapariGUI(QWidget):
         self.viewer = napari.Viewer(title=self._get_patient_display_name())
         self.viewer.bind_key('Escape', self.cancel_prompt_mode)
         self.img_layer = self.viewer.add_image(
-            self.imgs.permute(0,2,3,1).cpu().numpy(), name='image, point layer', rgb=True
+            self.imgs.permute(0,2,3,1).cpu().numpy(), name='Image', rgb=True
         )
         self.mask_layer = self.viewer.add_labels(
-            np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8), name='mask, box layer'
+            np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8), name='Mask'
         )
         self.user_pts_layer = self.viewer.add_points(
-            np.empty((0,3)), name='User Points correction layer', size=5
+            np.empty((0,3)), name='Points', size=5
         )
         # Initialize empty RGBA to avoid napari illegal color warnings
         empty_rgba = np.zeros((0, 4), dtype=float)
@@ -70,7 +70,7 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
         self.box_layer = self.viewer.add_shapes(
-            np.empty((0,4,3)), name='User Boxes correction layer', shape_type='rectangle',
+            np.empty((0,4,3)), name='Boxes', shape_type='rectangle',
             edge_color='red', face_color=[0,0,0,0], ndim=3
         )
         self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))

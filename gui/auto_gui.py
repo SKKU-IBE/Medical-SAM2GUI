@@ -42,6 +42,11 @@ class MedSAM2NapariGUI(QWidget):
     ):
         super().__init__()
         # State
+        # Normalize image tensor to shape [T, C, H, W]
+        if imgs.ndim == 3:
+            imgs = imgs.unsqueeze(1)
+        elif imgs.ndim != 4:
+            raise ValueError(f"Expected imgs with 3 or 4 dims, got {imgs.shape}")
         self.imgs = imgs
         self.video_segments = video_segments
         self.net = net
@@ -78,8 +83,15 @@ class MedSAM2NapariGUI(QWidget):
         self.viewer.bind_key('Escape', self.cancel_prompt_mode)
 
         # Layers
+        c = self.imgs.shape[1]
+        if c == 1:
+            img_data = self.imgs.squeeze(1).cpu().numpy()
+            rgb_flag = False
+        else:
+            img_data = self.imgs[:, :3].permute(0, 2, 3, 1).cpu().numpy()
+            rgb_flag = True
         self.img_layer = self.viewer.add_image(
-            imgs.permute(0,2,3,1).cpu().numpy(), name='Image', rgb=True
+            img_data, name='Image', rgb=rgb_flag
         )
         
         # Initial mask visualization
@@ -96,19 +108,20 @@ class MedSAM2NapariGUI(QWidget):
         # Add Object ID text layer
         self._init_text_layer()
         
-        # Auto prompts visualization
-        self._init_prompt_layers()
+        # Skip auto prompt layers to avoid confusion; all prompts go through unified layers
+        self.auto_pts_layer = None
+        self.auto_box_layer = None
         
         # User prompts layers
         self.user_pts_layer = self.viewer.add_points(
-            np.empty((0,3)), name='User Points', face_color='green', size=5
+            np.empty((0,3)), name='Points', face_color='green', size=5
         )
         self.user_box_layer = self.viewer.add_shapes(
-            np.empty((0,4,3)), name='User Boxes', shape_type='rectangle',
+            np.empty((0,4,3)), name='Boxes', shape_type='rectangle',
             edge_color='red', face_color=[0,0,0,0]
         )
         self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))
-        self._attach_mode_guard(self.user_box_layer, allowed_modes=('select', 'pan_zoom'))
+        self._attach_mode_guard(self.user_box_layer, allowed_modes=('select', 'pan_zoom', 'add_rectangle'))
         self.user_pts_layer.editable = False
         self.user_box_layer.editable = False
         self.manual_edit_enabled = False  # allow freehand label/box editing on demand
@@ -165,15 +178,6 @@ class MedSAM2NapariGUI(QWidget):
 
     def _setup_layer_callbacks(self):
         """Setup layer event callbacks"""
-        @self.auto_pts_layer.events.data.connect
-        def on_auto_points_data_change():
-            if not hasattr(self, 'auto_pts_layer') or not self.auto_pts_layer.editable:
-                return
-            if getattr(self, '_updating_layers', False):
-                return
-            self._sync_auto_points_from_layer()
-            print("Auto points data synchronized from layer")
-        
         @self.user_pts_layer.events.data.connect
         def on_user_points_data_change():
             if not hasattr(self, 'user_pts_layer') or not self.user_pts_layer.editable:
@@ -636,14 +640,12 @@ class MedSAM2NapariGUI(QWidget):
         layout.addLayout(ohl)
         self.manual_edit_button = None
         btns = [
-            ('Add +Pt', self.enable_add_user_pos, 'btn_add_pos'),
-            ('Add -Pt', self.enable_add_user_neg, 'btn_add_neg'),
+            ('Add + Point', self.enable_add_user_pos, 'btn_add_pos'),
+            ('Add - Point', self.enable_add_user_neg, 'btn_add_neg'),
             ('Add Box', self.enable_add_user_box, 'btn_add_box'),
             ('Manual Edit', self.toggle_manual_annotation, 'manual_edit_button'),
-            ('Edit Auto Pts', self.toggle_edit_auto_pts, None),
-            ('Edit Auto Boxes', self.toggle_edit_auto_boxes, None),
-            ('Edit User Pts', self.toggle_edit_user_pts, 'btn_edit_points'),
-            ('Edit User Boxes', self.toggle_edit_user_boxes, 'btn_edit_boxes'),
+            ('Edit Points', self.toggle_edit_user_pts, 'btn_edit_points'),
+            ('Edit Boxes', self.toggle_edit_user_boxes, 'btn_edit_boxes'),
             ('Toggle Object IDs', self.toggle_text_visibility, None),
             ('Propagate', self.propagate_prompt, None),
             ('Slice Propagate', self.slicewise_propagate_prompt, None),
@@ -684,10 +686,10 @@ class MedSAM2NapariGUI(QWidget):
         keymap = [
             ('h', self.enable_add_user_pos),
             ('j', self.enable_add_user_neg),
-            ('a', self.enable_add_user_box),
+            ('r', self.enable_add_user_box),
+            ('t', self.toggle_edit_user_boxes),
             ('q', self.toggle_manual_annotation),
             ('k', self.toggle_edit_user_pts),
-            ('z', self.toggle_edit_user_boxes),
             ('y', lambda: self._set_mask_opacity(0.0)),
             ('o', lambda: self._set_mask_opacity(1.0)),
             ('u', lambda: self._bump_mask_opacity(-0.1)),
@@ -718,8 +720,10 @@ class MedSAM2NapariGUI(QWidget):
             ('Ctrl+X', self.mask_undo),
             ('Ctrl+U', self.mask_redo),
             ('Ctrl+S', lambda: save_masks_auto(self)),
-            ('Z', self.toggle_edit_user_boxes),
-            ('z', self.toggle_edit_user_boxes),
+            ('H', self.enable_add_user_pos),
+            ('J', self.enable_add_user_neg),
+            ('R', self.enable_add_user_box),
+            ('T', self.toggle_edit_user_boxes),
             ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
         ]:
             if handler:
@@ -869,8 +873,10 @@ class MedSAM2NapariGUI(QWidget):
             return
         if not self._activate_tool('add_pos'):
             return
-        self._select_layer(self.user_pts_layer)
+        self._select_layer(self.img_layer)
         self._set_button_active(self.btn_add_pos, True)
+        self._set_button_active(self.btn_add_neg, False)
+        self._set_button_active(self.btn_add_box, False)
         def cb(layer, evt):
             if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
@@ -893,8 +899,10 @@ class MedSAM2NapariGUI(QWidget):
             return
         if not self._activate_tool('add_neg'):
             return
-        self._select_layer(self.user_pts_layer)
+        self._select_layer(self.img_layer)
         self._set_button_active(self.btn_add_neg, True)
+        self._set_button_active(self.btn_add_pos, False)
+        self._set_button_active(self.btn_add_box, False)
         def cb(layer, evt):
             if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
@@ -917,9 +925,15 @@ class MedSAM2NapariGUI(QWidget):
             return
         if not self._activate_tool('add_box'):
             return
-        self._select_layer(self.mask_layer)
-        self.mask_layer.editable = True  # ensure drag callbacks fire on labels layer
+        self._select_layer(self.user_box_layer)
+        self.user_box_layer.editable = True
+        try:
+            self.user_box_layer.mode = 'add_rectangle'
+        except Exception:
+            pass
         self._set_button_active(self.btn_add_box, True)
+        self._set_button_active(self.btn_add_pos, False)
+        self._set_button_active(self.btn_add_neg, False)
         pts = []
         def cb(layer, evt):
             if self.manual_edit_enabled:
@@ -940,7 +954,9 @@ class MedSAM2NapariGUI(QWidget):
                 self.update_prompt_layers()
                 self._record_prompt_event('user_box', t, self.current_obj_id)
                 print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
-        self.mask_layer.mouse_drag_callbacks.append(cb)
+        self.mask_layer.mouse_drag_callbacks.clear()
+        self.user_box_layer.mouse_drag_callbacks.clear()
+        self.user_box_layer.mouse_drag_callbacks.append(cb)
 
     def toggle_manual_annotation(self):
         # Enable napari's native painting/box drawing without needing prompt buttons
@@ -1035,6 +1051,10 @@ class MedSAM2NapariGUI(QWidget):
             return
         self._select_layer(self.user_pts_layer)
         self.user_pts_layer.editable = True
+        try:
+            self.user_pts_layer.mode = 'select'
+        except Exception:
+            pass
         self._set_button_active(self.btn_edit_points, True)
         print("User points editing enabled - you can move/delete user points")
 
@@ -1051,35 +1071,17 @@ class MedSAM2NapariGUI(QWidget):
             return
         self._select_layer(self.user_box_layer)
         self.user_box_layer.editable = True
-        self.user_box_layer.mode = 'select'
+        try:
+            self.user_box_layer.mode = 'select'
+        except Exception:
+            pass
         self._set_button_active(self.btn_edit_boxes, True)
         print("User boxes editing enabled - rectangles will maintain shape during editing")
 
     def update_prompt_layers(self):
         self._updating_layers = True
-        auto_pts, auto_pt_colors = [], []
-        for frame_idx, objs in self.point_prompts.items():
-            for _, pts_list in objs.items():
-                for pt_info in pts_list:
-                    if len(pt_info) >= 3:
-                        x, y, label = pt_info[:3]
-                        try:
-                            if isinstance(x, torch.Tensor):
-                                x = x.item()
-                            if isinstance(y, torch.Tensor):
-                                y = y.item()
-                            if isinstance(label, torch.Tensor):
-                                label = label.item()
-                            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                                auto_pts.append([int(frame_idx), int(y), int(x)])
-                                auto_pt_colors.append('yellow' if label == 1 else 'orange')
-                        except Exception as e:
-                            print(f"Error processing point {pt_info}: {e}")
-                            continue
-        if auto_pts:
-            self.auto_pts_layer.data = np.array(auto_pts, dtype=np.float64)
-            self.auto_pts_layer.face_color = auto_pt_colors
-        else:
+        # Skip auto layers; user-facing layers are handled below
+        if self.auto_pts_layer is not None:
             self.auto_pts_layer.data = np.empty((0,3), dtype=np.float64)
             self.auto_pts_layer.face_color = []
         auto_boxes = []
@@ -1108,12 +1110,13 @@ class MedSAM2NapariGUI(QWidget):
                 except Exception as e:
                     print(f"Error processing box for frame {frame_idx}: {e}")
                     continue
-        if auto_boxes:
-            self.auto_box_layer.data = np.array(auto_boxes, dtype=np.float64)
-            print(f"Updated auto_box_layer with {len(auto_boxes)} boxes")
-        else:
-            self.auto_box_layer.data = np.empty((0,4,3), dtype=np.float64)
-            print("No valid auto boxes found, setting empty data")
+        if self.auto_box_layer is not None:
+            if auto_boxes:
+                self.auto_box_layer.data = np.array(auto_boxes, dtype=np.float64)
+                print(f"Updated auto_box_layer with {len(auto_boxes)} boxes")
+            else:
+                self.auto_box_layer.data = np.empty((0,4,3), dtype=np.float64)
+                print("No valid auto boxes found, setting empty data")
         user_pts, user_pt_colors = [], []
         for action in self.prompt_history:
             if action[0] == 'add_pos_pt':

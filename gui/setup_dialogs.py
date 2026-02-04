@@ -169,20 +169,21 @@ class InitialSetupDialog(QDialog):
 class PatientInputDialog(QDialog):
     """Dialog to input mode and method for each patient."""
 
-    def __init__(self, patient_id, patient_index, parent=None):
+    def __init__(self, patient_id, patient_index, defaults=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Patient {patient_index}: {patient_id} - Select settings")
         self.setModal(True)
         self.resize(500, 500)
 
-        self.mode = "manual"
-        self.method = None
-        self.use_double_viewer = False
-        self.double_path = None
-        self.preprocess = False
-        self.det_model = "sam2_det"
-        self.seg_model = "sam2_seg"
-        self.nnunet_model_path = None
+        defaults = defaults or {}
+        self.mode = defaults.get("mode", "manual")
+        self.method = defaults.get("method", None)
+        self.use_double_viewer = defaults.get("use_double_viewer", False)
+        self.double_path = defaults.get("double_path", None)
+        self.preprocess = defaults.get("preprocess", False)
+        self.det_model = defaults.get("det_model", "sam2_det")
+        self.seg_model = defaults.get("seg_model", "sam2_seg")
+        self.nnunet_model_path = defaults.get("nnunet_model_path", None)
 
         layout = QVBoxLayout()
 
@@ -198,7 +199,7 @@ class PatientInputDialog(QDialog):
         self.preprocess_checkbox = QCheckBox(
             "Perform preprocessing (N4 bias correction + intensity normalization)"
         )
-        self.preprocess_checkbox.setChecked(False)
+        self.preprocess_checkbox.setChecked(self.preprocess)
         layout.addWidget(self.preprocess_checkbox)
 
         preprocess_desc = QLabel(
@@ -216,7 +217,7 @@ class PatientInputDialog(QDialog):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["auto", "manual"])
-        self.mode_combo.setCurrentText("manual")
+        self.mode_combo.setCurrentText(self.mode)
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
         layout.addWidget(self.mode_combo)
 
@@ -226,7 +227,7 @@ class PatientInputDialog(QDialog):
 
         self.method_combo = QComboBox()
         self.method_combo.addItems(["Detection", "Segmentation"])
-        self.method_combo.setCurrentText("Segmentation")
+        self.method_combo.setCurrentText(self.method if self.method else "Segmentation")
         self.method_combo.currentTextChanged.connect(self.on_method_changed)
         layout.addWidget(self.method_combo)
 
@@ -234,9 +235,12 @@ class PatientInputDialog(QDialog):
         self.det_model_label.setStyleSheet("font-weight: bold;")
         self.det_model_combo = QComboBox()
         self.det_model_combo.addItems(["sam2_det", "custom"])
+        self.det_model_combo.setCurrentText(self.det_model if self.det_model in ["sam2_det", "custom"] else "custom")
         self.det_model_combo.currentTextChanged.connect(self.on_det_model_changed)
         self.det_model_custom_input = QLineEdit()
         self.det_model_custom_input.setPlaceholderText("Enter custom detection model name")
+        if self.det_model not in ["sam2_det", "custom"]:
+            self.det_model_custom_input.setText(self.det_model)
         layout.addWidget(self.det_model_label)
         layout.addWidget(self.det_model_combo)
         layout.addWidget(self.det_model_custom_input)
@@ -245,6 +249,7 @@ class PatientInputDialog(QDialog):
         self.seg_model_label.setStyleSheet("font-weight: bold;")
         self.seg_model_combo = QComboBox()
         self.seg_model_combo.addItems(["sam2_seg", "nnUNetv2"])
+        self.seg_model_combo.setCurrentText(self.seg_model if self.seg_model in ["sam2_seg", "nnUNetv2"] else "sam2_seg")
         self.seg_model_combo.currentTextChanged.connect(lambda _: self.on_method_changed(self.method_combo.currentText()))
         layout.addWidget(self.seg_model_label)
         layout.addWidget(self.seg_model_combo)
@@ -252,6 +257,8 @@ class PatientInputDialog(QDialog):
         self.nnunet_path_label = QLabel("nnUNetv2 model folder:")
         self.nnunet_path_input = QLineEdit()
         self.nnunet_path_input.setPlaceholderText("/path/to/nnunetv2_model")
+        if self.nnunet_model_path:
+            self.nnunet_path_input.setText(self.nnunet_model_path)
         self.nnunet_path_browse = QPushButton("Browse")
         self.nnunet_path_browse.clicked.connect(self.browse_nnunet_path)
         nnunet_path_layout = QHBoxLayout()
@@ -260,7 +267,7 @@ class PatientInputDialog(QDialog):
         nnunet_path_layout.addWidget(self.nnunet_path_browse)
         layout.addLayout(nnunet_path_layout)
 
-        self.on_mode_changed("manual")
+        self.on_mode_changed(self.mode)
         layout.addWidget(QLabel(""))
 
         double_viewer_label = QLabel("Double Viewer Setup:")
