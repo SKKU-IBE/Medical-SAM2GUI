@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import napari
@@ -59,6 +60,11 @@ class ManualPromptNapariGUI(QWidget):
         self.mask_layer = self.viewer.add_labels(
             np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8), name='Mask'
         )
+        try:
+            # Track last non-zero opacity so toggle can restore it
+            self._last_nonzero_mask_opacity = float(self.mask_layer.opacity)
+        except Exception:
+            self._last_nonzero_mask_opacity = 1.0
         self.user_pts_layer = self.viewer.add_points(
             np.empty((0,3)), name='Points', size=5
         )
@@ -71,7 +77,7 @@ class ManualPromptNapariGUI(QWidget):
             pass
         self.box_layer = self.viewer.add_shapes(
             np.empty((0,4,3)), name='Boxes', shape_type='rectangle',
-            edge_color='red', face_color=[0,0,0,0], ndim=3
+            edge_color='red', face_color=[0,0,0,0], edge_width=2, ndim=3
         )
         self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))
         # allow select/pan and add_rectangle so drag-to-add works
@@ -119,10 +125,31 @@ class ManualPromptNapariGUI(QWidget):
             self.metrics.add_event('manual_gui_initialized', n_frames=self.n_frames, patient_id=str(self.patient_id))
             self.metrics.set_info('n_frames', int(self.n_frames))
 
+    def _format_patient_id(self, patient_id):
+        try:
+            pid = patient_id[0] if isinstance(patient_id, (list, tuple)) else patient_id
+        except Exception:
+            pid = patient_id
+        pid_str = '' if pid is None else str(pid)
+        if not pid_str:
+            return "Unknown"
+        norm = os.path.normpath(pid_str)
+        parts = norm.replace('\\', '/').split('/')
+        if len(parts) >= 2:
+            basename = parts[-1]
+            parent = '/'.join(parts[:-1])
+            return f"{basename} ({parent})"
+        return pid_str
+
     def _get_patient_display_name(self):
-        if isinstance(self.patient_id, (list, tuple)):
-            return str(self.patient_id[0])
-        return str(self.patient_id)
+        base = self._format_patient_id(self.patient_id)
+        try:
+            nav = getattr(self, 'navigation_manager', None)
+            if nav and getattr(nav, 'patient_index', None) is not None:
+                return f"Patient {nav.patient_index}: {base}"
+        except Exception:
+            pass
+        return base
 
     def _setup_viewer_callbacks(self):
         @self.viewer.dims.events.current_step.connect
@@ -234,27 +261,35 @@ class ManualPromptNapariGUI(QWidget):
             ('k', self.enable_edit_points),
             ('t', self.enable_edit_boxes),
             ('c', self.clear_all_prompts),
-            ('y', lambda: self._set_mask_opacity(0.0)),
+            ('y', self._toggle_mask_opacity),
             ('o', lambda: self._set_mask_opacity(1.0)),
             ('u', lambda: self._bump_mask_opacity(-0.1)),
             ('i', lambda: self._bump_mask_opacity(0.1)),
         ]
+        def _bind_global(seq, fn, overwrite=True):
+            try:
+                self.viewer.bind_key(seq, lambda v: fn(), overwrite=overwrite, bind_global=True)
+            except TypeError:
+                self.viewer.bind_key(seq, lambda v: fn(), overwrite=overwrite)
+
         for key, handler in keymap:
-            # overwrite=True to beat any napari default bindings (e.g., zoom)
-            self.viewer.bind_key(key, lambda v, h=handler: h(), overwrite=True)
-        self.viewer.bind_key('s', lambda v: self.save_masks(), overwrite=True)
-        self.viewer.bind_key('Control-Z', lambda v: self.prompt_undo(), overwrite=True)
-        self.viewer.bind_key('Control-Y', lambda v: self.prompt_redo(), overwrite=True)
-        self.viewer.bind_key('Control-X', lambda v: self.mask_undo(), overwrite=True)
-        self.viewer.bind_key('Control-U', lambda v: self.mask_redo(), overwrite=True)
-        self.viewer.bind_key('Control-S', lambda v: self.save_masks(), overwrite=True)
-        self.viewer.bind_key('Ctrl+Z', lambda v: self.prompt_undo(), overwrite=True)
-        self.viewer.bind_key('Ctrl+Y', lambda v: self.prompt_redo(), overwrite=True)
-        self.viewer.bind_key('Ctrl+X', lambda v: self.mask_undo(), overwrite=True)
-        self.viewer.bind_key('Ctrl+U', lambda v: self.mask_redo(), overwrite=True)
-        self.viewer.bind_key('Ctrl+S', lambda v: self.save_masks(), overwrite=True)
+            _bind_global(key, handler, overwrite=True)
+        _bind_global('s', self.save_masks, overwrite=True)
+        _bind_global('Control-Z', self.prompt_undo, overwrite=True)
+        _bind_global('Control-Y', self.prompt_redo, overwrite=True)
+        _bind_global('Control-X', self.mask_undo, overwrite=True)
+        _bind_global('Control-U', self.mask_redo, overwrite=True)
+        _bind_global('Control-S', self.save_masks, overwrite=True)
+        _bind_global('Ctrl+Z', self.prompt_undo, overwrite=True)
+        _bind_global('Ctrl+Y', self.prompt_redo, overwrite=True)
+        _bind_global('Ctrl+X', self.mask_undo, overwrite=True)
+        _bind_global('Ctrl+U', self.mask_redo, overwrite=True)
+        _bind_global('Ctrl+S', self.save_masks, overwrite=True)
+        _bind_global('Alt+Z', self.mask_undo, overwrite=True)
+        _bind_global('Alt+Y', self.mask_redo, overwrite=True)
         if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
-            self.viewer.bind_key('n', lambda v: self.next_patient(), overwrite=True)
+            _bind_global('n', self.next_patient, overwrite=True)
+            _bind_global('b', self.prev_patient, overwrite=True)
 
     def _bind_qshortcuts(self):
         # Qt-level shortcuts to ensure undo/redo work even when dock widget has focus
@@ -265,9 +300,12 @@ class ManualPromptNapariGUI(QWidget):
             ('Ctrl+X', self.mask_undo),
             ('Ctrl+U', self.mask_redo),
             ('Ctrl+S', self.save_masks),
+            ('Alt+Z', self.mask_undo),
+            ('Alt+Y', self.mask_redo),
             ('R', self.enable_add_box),
             ('T', self.enable_edit_boxes),
             ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
+            ('B', self.prev_patient if getattr(self, 'navigation_manager', None) is not None else None),
         ]:
             if handler:
                 sc = QShortcut(QKeySequence(seq), self)
@@ -303,8 +341,13 @@ class ManualPromptNapariGUI(QWidget):
 
     def _set_mask_opacity(self, value):
         try:
-            self.mask_layer.opacity = float(np.clip(value, 0.0, 1.0))
-            self.viewer.status = f"Mask opacity: {self.mask_layer.opacity:.2f}"
+            value = float(np.clip(value, 0.0, 1.0))
+            self.mask_layer.opacity = value
+            if value > 0.0:
+                self._last_nonzero_mask_opacity = value
+                self.viewer.status = f"Mask opacity: {value:.2f}"
+            else:
+                self.viewer.status = "Mask opacity: off"
         except Exception:
             pass
 
@@ -329,7 +372,23 @@ class ManualPromptNapariGUI(QWidget):
         try:
             new_opacity = float(np.clip(self.mask_layer.opacity + delta, 0.0, 1.0))
             self.mask_layer.opacity = new_opacity
+            if new_opacity > 0.0:
+                self._last_nonzero_mask_opacity = new_opacity
             self.viewer.status = f"Mask opacity: {new_opacity:.2f}"
+        except Exception:
+            pass
+
+    def _toggle_mask_opacity(self):
+        try:
+            current = float(self.mask_layer.opacity)
+            if current > 0.0:
+                self._last_nonzero_mask_opacity = current
+                self.mask_layer.opacity = 0.0
+                self.viewer.status = "Mask opacity: off"
+            else:
+                restore = float(np.clip(getattr(self, '_last_nonzero_mask_opacity', 1.0), 0.0, 1.0)) or 1.0
+                self.mask_layer.opacity = restore
+                self.viewer.status = f"Mask opacity: {restore:.2f}"
         except Exception:
             pass
 
@@ -406,20 +465,25 @@ class ManualPromptNapariGUI(QWidget):
                     y2, x2 = int(corners[2][1]), int(corners[2][2])
                     x1, x2 = min(x1, x2), max(x1, x2)
                     y1, y2 = min(y1, y2), max(y1, y2)
-                    best_obj_id = None
+                    reuse_obj_id = None
                     min_distance = float('inf')
                     for old_t, old_obj_id, old_x1, old_y1, old_x2, old_y2 in old_boxes:
-                        if old_t == frame_idx:
-                            old_cx, old_cy = (old_x1 + old_x2) / 2, (old_y1 + old_y2) / 2
-                            new_cx, new_cy = (x1 + x2) / 2, (y1 + y2) / 2
-                            distance = ((old_cx - new_cx) ** 2 + (old_cy - new_cy) ** 2) ** 0.5
-                            if distance < min_distance:
-                                min_distance = distance
-                                best_obj_id = old_obj_id
-                    if best_obj_id is None:
-                        best_obj_id = self.current_obj_id
-                    self.box_prompts.append((frame_idx, best_obj_id, x1, y1, x2, y2))
-                    print(f"  Frame {frame_idx}, ObjID {best_obj_id}: [{x1}, {y1}, {x2}, {y2}]")
+                        if old_t != frame_idx:
+                            continue
+                        overlaps_x = not (x2 < old_x1 or x1 > old_x2)
+                        overlaps_y = not (y2 < old_y1 or y1 > old_y2)
+                        if not (overlaps_x and overlaps_y):
+                            continue
+                        old_cx, old_cy = (old_x1 + old_x2) / 2, (old_y1 + old_y2) / 2
+                        new_cx, new_cy = (x1 + x2) / 2, (y1 + y2) / 2
+                        distance = ((old_cx - new_cx) ** 2 + (old_cy - new_cy) ** 2) ** 0.5
+                        # Only reuse when ids match; otherwise respect the user's current selection
+                        if distance < min_distance and old_obj_id == self.current_obj_id:
+                            min_distance = distance
+                            reuse_obj_id = old_obj_id
+                    obj_id = reuse_obj_id if reuse_obj_id is not None else self.current_obj_id
+                    self.box_prompts.append((frame_idx, obj_id, x1, y1, x2, y2))
+                    print(f"  Frame {frame_idx}, ObjID {obj_id}: [{x1}, {y1}, {x2}, {y2}]")
         if record_history and old_boxes != list(self.box_prompts):
             # store previous state so undo restores it
             self.prompt_history.append(('box_state', old_boxes))
@@ -854,7 +918,7 @@ class ManualPromptNapariGUI(QWidget):
             self.box_layer.edge_color = ['red'] * n_shapes
             self.box_layer.face_color = [[0, 0, 0, 0]] * n_shapes
             try:
-                self.box_layer.edge_width = 3
+                self.box_layer.edge_width = 2
             except Exception:
                 pass
         else:

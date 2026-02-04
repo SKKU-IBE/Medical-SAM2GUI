@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import napari
@@ -20,7 +21,7 @@ import threading
 from scipy.ndimage import center_of_mass
 
 from gui.prompts import make_initial_label_stack, normalize_box_prompts, normalize_point_prompts
-from gui.rendering import render_auto_volume
+from gui.rendering import render_manual_volume
 from gui.io import save_masks_auto
 from gui.metrics import UsageMetricsRecorder
 
@@ -79,8 +80,13 @@ class MedSAM2NapariGUI(QWidget):
         self.text_visible = True
 
         # Napari viewer
-        self.viewer = napari.Viewer(title=str(patient_id))
+        self.viewer = napari.Viewer(title=self._get_patient_display_name())
         self.viewer.bind_key('Escape', self.cancel_prompt_mode)
+        try:
+            # Track last non-zero opacity for toggle
+            self._last_nonzero_mask_opacity = float(1.0)
+        except Exception:
+            self._last_nonzero_mask_opacity = 1.0
 
         # Layers
         c = self.imgs.shape[1]
@@ -118,7 +124,7 @@ class MedSAM2NapariGUI(QWidget):
         )
         self.user_box_layer = self.viewer.add_shapes(
             np.empty((0,4,3)), name='Boxes', shape_type='rectangle',
-            edge_color='red', face_color=[0,0,0,0]
+            edge_color='red', face_color=[0,0,0,0], edge_width=2, ndim=3
         )
         self._attach_mode_guard(self.user_pts_layer, allowed_modes=('select', 'pan_zoom'))
         self._attach_mode_guard(self.user_box_layer, allowed_modes=('select', 'pan_zoom', 'add_rectangle'))
@@ -239,19 +245,7 @@ class MedSAM2NapariGUI(QWidget):
 
     def _setup_box_editing_events(self):
         """Setup box editing events - debounced data change detection"""
-        self._auto_box_edit_timer = None
         self._user_box_edit_timer = None
-        
-        @self.auto_box_layer.events.data.connect
-        def on_auto_boxes_data_change():
-            if not hasattr(self, 'auto_box_layer') or not self.auto_box_layer.editable:
-                return
-            if getattr(self, '_updating_auto_boxes', False):
-                return
-            if self._auto_box_edit_timer:
-                self._auto_box_edit_timer.cancel()
-            self._auto_box_edit_timer = threading.Timer(0.3, self._sync_auto_boxes_with_rectangle_constraint)
-            self._auto_box_edit_timer.start()
             
         @self.user_box_layer.events.data.connect
         def on_user_boxes_data_change():
@@ -272,51 +266,6 @@ class MedSAM2NapariGUI(QWidget):
         if self.first_user_prompt_ts is None:
             self.first_user_prompt_ts = time.time()
             self.metrics.set_info('time_to_first_user_prompt_sec', round(self.first_user_prompt_ts - self.session_started_at, 3))
-
-    def _sync_auto_boxes_with_rectangle_constraint(self):
-        """Sync auto boxes with rectangle constraint - support both shrinking/expanding"""
-        if getattr(self, '_updating_auto_boxes', False):
-            return
-        
-        self._updating_auto_boxes = True
-        try:
-            current_data = list(self.auto_box_layer.data)
-            if not current_data:
-                return
-                
-            corrected_data = []
-            has_changes = False
-            
-            for shape in current_data:
-                if len(shape) >= 4:
-                    frame = shape[0][0]
-                    y_coords = [pt[1] for pt in shape]  
-                    x_coords = [pt[2] for pt in shape]
-                    y_min, y_max = min(y_coords), max(y_coords)
-                    x_min, x_max = min(x_coords), max(x_coords)
-                    if y_max <= y_min:
-                        y_max = y_min + 1
-                    if x_max <= x_min:
-                        x_max = x_min + 1
-                    rect_shape = np.array([
-                        [frame, y_min, x_min],
-                        [frame, y_min, x_max],
-                        [frame, y_max, x_max],
-                        [frame, y_max, x_min]
-                    ], dtype=float)
-                    if not np.allclose(rect_shape, shape, atol=1e-6):
-                        has_changes = True
-                    corrected_data.append(rect_shape)
-                else:
-                    corrected_data.append(shape)
-            if has_changes:
-                print(f"Applying rectangle constraint to {len(corrected_data)} auto boxes")
-                self.auto_box_layer.data = corrected_data
-            self._sync_auto_boxes_from_layer()
-        except Exception as e:
-            print(f"Error in auto box rectangle constraint: {e}")
-        finally:
-            self._updating_auto_boxes = False
 
     def _sync_user_boxes_with_rectangle_constraint(self):
         """Sync user boxes with rectangle constraint - support both shrinking/expanding"""
@@ -380,53 +329,19 @@ class MedSAM2NapariGUI(QWidget):
                     return 0
         return 1
 
-    def _sync_auto_points_from_layer(self):
-        if getattr(self, '_updating_layers', False) or not self.auto_pts_layer.editable:
-            return
-        self.point_prompts.clear()
-        if len(self.auto_pts_layer.data) > 0:
-            for i, (frame_idx, y, x) in enumerate(self.auto_pts_layer.data):
-                frame_idx, y, x = int(frame_idx), int(y), int(x)
-                color = self.auto_pts_layer.face_color[i] if i < len(self.auto_pts_layer.face_color) else 'yellow'
-                label = self._color_to_label(color)
-                obj_id = self.current_obj_id
-                if frame_idx not in self.point_prompts:
-                    self.point_prompts[frame_idx] = {}
-                if obj_id not in self.point_prompts[frame_idx]:
-                    self.point_prompts[frame_idx][obj_id] = []
-                self.point_prompts[frame_idx][obj_id].append((x, y, label))
-        print(f"Synced auto points: {sum(len(objs) for objs in self.point_prompts.values())} total points")
-
-    def _sync_auto_boxes_from_layer(self):
-        if getattr(self, '_updating_layers', False) or not self.auto_box_layer.editable:
-            return
-        self.box_prompts.clear()
-        if len(self.auto_box_layer.data) > 0:
-            for corners in self.auto_box_layer.data:
-                if len(corners) >= 4:
-                    frame_idx = int(corners[0][0])
-                    y1, x1 = int(corners[0][1]), int(corners[0][2])
-                    y2, x2 = int(corners[2][1]), int(corners[2][2])
-                    x1, x2 = min(x1, x2), max(x1, x2)
-                    y1, y2 = min(y1, y2), max(y1, y2)
-                    obj_id = self.current_obj_id
-                    if frame_idx not in self.box_prompts:
-                        self.box_prompts[frame_idx] = {}
-                    self.box_prompts[frame_idx][obj_id] = [x1, y1, x2, y2]
-        print(f"Synced auto boxes: {sum(len(objs) for objs in self.box_prompts.values())} total boxes")
-
     def _sync_user_points_from_layer(self):
         if getattr(self, '_updating_layers', False) or not self.user_pts_layer.editable:
             return
-        user_added_points = set()
-        for action in self.prompt_history:
-            if action[0] in ['add_pos_pt', 'add_neg_pt']:
-                _, t, obj_id, x, y = action
-                user_added_points.add((t, obj_id, x, y))
-        if len(self.user_pts_layer.data) > 0:
-            new_user_points = []
+        try:
+            obj_ids_prop = None
+            try:
+                obj_ids_prop = self.user_pts_layer.properties.get('obj_id', None)
+            except Exception:
+                obj_ids_prop = None
+            new_prompts = defaultdict(lambda: defaultdict(list))
             for i, (t, y, x) in enumerate(self.user_pts_layer.data):
                 t, y, x = int(t), int(y), int(x)
+                obj_id = int(obj_ids_prop[i]) if obj_ids_prop is not None and len(obj_ids_prop) > i else int(self.current_obj_id)
                 color = self.user_pts_layer.face_color[i] if i < len(self.user_pts_layer.face_color) else 'green'
                 if isinstance(color, str):
                     label = 1 if color.lower() == 'green' else 0
@@ -441,40 +356,34 @@ class MedSAM2NapariGUI(QWidget):
                         label = 1
                 else:
                     label = 1
-                if (t, self.current_obj_id, x, y) in user_added_points:
-                    new_user_points.append((t, self.current_obj_id, x, y, label))
-            for t, obj_id, x, y, label in new_user_points:
-                if t not in self.point_prompts:
-                    self.point_prompts[t] = {}
-                if obj_id not in self.point_prompts[t]:
-                    self.point_prompts[t][obj_id] = []
-                point_exists = any(pt[:3] == (x, y, label) for pt in self.point_prompts[t][obj_id])
-                if not point_exists:
-                    self.point_prompts[t][obj_id].append((x, y, label))
+                new_prompts[t][obj_id].append((x, y, label))
+            self.point_prompts = {t: dict(objs) for t, objs in new_prompts.items()}
+        except Exception as e:
+            print(f"Error syncing user points: {e}")
 
     def _sync_user_boxes_from_layer(self):
         if getattr(self, '_updating_layers', False) or not self.user_box_layer.editable:
             return
-        user_added_boxes = set()
-        for action in self.prompt_history:
-            if action[0] == 'add_box':
-                _, t, obj_id, x1, y1, x2, y2 = action
-                user_added_boxes.add((t, obj_id))
-        if len(self.user_box_layer.data) > 0:
-            new_user_boxes = []
-            for corners in self.user_box_layer.data:
-                if len(corners) >= 4:
-                    t = int(corners[0][0])
-                    y1, x1 = int(corners[0][1]), int(corners[0][2])
-                    y2, x2 = int(corners[2][1]), int(corners[2][2])
-                    x1, x2 = min(x1, x2), max(x1, x2)
-                    y1, y2 = min(y1, y2), max(y1, y2)
-                    if (t, self.current_obj_id) in user_added_boxes:
-                        new_user_boxes.append((t, self.current_obj_id, x1, y1, x2, y2))
-            for t, obj_id, x1, y1, x2, y2 in new_user_boxes:
-                if t not in self.box_prompts:
-                    self.box_prompts[t] = {}
-                self.box_prompts[t][obj_id] = [x1, y1, x2, y2]
+        try:
+            obj_ids_prop = None
+            try:
+                obj_ids_prop = self.user_box_layer.properties.get('obj_id', None)
+            except Exception:
+                obj_ids_prop = None
+            new_boxes = defaultdict(dict)
+            for i, corners in enumerate(self.user_box_layer.data):
+                if len(corners) < 4:
+                    continue
+                t = int(corners[0][0])
+                y1, x1 = int(corners[0][1]), int(corners[0][2])
+                y2, x2 = int(corners[2][1]), int(corners[2][2])
+                x1, x2 = min(x1, x2), max(x1, x2)
+                y1, y2 = min(y1, y2), max(y1, y2)
+                obj_id = int(obj_ids_prop[i]) if obj_ids_prop is not None and len(obj_ids_prop) > i else int(self.current_obj_id)
+                new_boxes[t][obj_id] = [x1, y1, x2, y2]
+            self.box_prompts = {t: dict(objs) for t, objs in new_boxes.items()}
+        except Exception as e:
+            print(f"Error syncing user boxes: {e}")
 
     def _init_text_layer(self):
         text_data = self._generate_text_data()
@@ -521,92 +430,6 @@ class MedSAM2NapariGUI(QWidget):
             return {'coordinates': np.array(coordinates, dtype=np.float64), 'labels': labels}
         return None
 
-    def _init_prompt_layers(self):
-        auto_pts = []
-        auto_pt_colors = []
-        for frame_idx, objs in self.point_prompts.items():
-            for _, pts_list in objs.items():
-                for pt_info in pts_list:
-                    if len(pt_info) >= 3:
-                        x, y, label = pt_info[:3]
-                        auto_pts.append([frame_idx, y, x])
-                        auto_pt_colors.append('yellow' if label == 1 else 'orange')
-        self.auto_pts_layer = self.viewer.add_points(
-            np.array(auto_pts) if auto_pts else np.empty((0,3)), 
-            name='Auto Points', face_color=auto_pt_colors if auto_pt_colors else 'yellow', size=5
-        )
-        auto_boxes = []
-        for frame_idx, objs in self.box_prompts.items():
-            for _, box in objs.items():
-                if box is None:
-                    continue 
-                try:
-                    if isinstance(box, torch.Tensor):
-                        box_list = box.cpu().numpy().tolist()
-                    elif isinstance(box, np.ndarray):
-                        box_list = box.tolist()
-                    elif isinstance(box, (list, tuple)):
-                        box_list = list(box)
-                    else:
-                        continue
-                    if len(box_list) < 4:
-                        continue
-                    x1, y1, x2, y2 = box_list[:4]
-                    coords = []
-                    for coord in [x1, y1, x2, y2]:
-                        if isinstance(coord, torch.Tensor):
-                            coord_val = coord.item()
-                        elif isinstance(coord, (int, float, np.integer, np.floating)):
-                            coord_val = float(coord)
-                        else:
-                            coord_val = None
-                            break
-                        coords.append(coord_val)
-                    if None in coords:
-                        continue
-                    x1, y1, x2, y2 = coords
-                    frame_idx_val = float(frame_idx)
-                    corners = self._box2corners(frame_idx_val, x1, y1, x2, y2)
-                    if corners.shape != (4, 3):
-                        continue
-                    if np.any(~np.isfinite(corners)):
-                        continue
-                    auto_boxes.append(corners)
-                except Exception as e:
-                    print(f"    Error processing box for frame {frame_idx}: {e}")
-                    traceback.print_exc()
-                    continue
-        try:
-            if auto_boxes:
-                self.auto_box_layer = self.viewer.add_shapes(
-                    auto_boxes,
-                    name='Auto Boxes',
-                    shape_type='rectangle',
-                    edge_color='yellow',
-                    face_color=[0,0,0,0]
-                )
-            else:
-                self.auto_box_layer = self.viewer.add_shapes(
-                    np.empty((0,4,3)),
-                    name='Auto Boxes',
-                    shape_type='rectangle',
-                    edge_color='yellow',
-                    face_color=[0,0,0,0]
-                )
-        except Exception as e:
-            print(f"Error creating auto_box_layer: {e}")
-            traceback.print_exc()
-            self.auto_box_layer = self.viewer.add_shapes(
-                np.empty((0,4,3)),
-                name='Auto Boxes',
-                shape_type='rectangle',
-                edge_color='yellow',
-                face_color=[0,0,0,0]
-            )
-        self.auto_pts_layer.editable = False
-        self.auto_box_layer.editable = False
-        print(f"Prompt layers initialized: {len(auto_pts)} points, {len(auto_boxes)} boxes")
-
     def _box2corners(self, f, x1, y1, x2, y2):
         return np.array([
             [f, y1, x1],
@@ -646,10 +469,9 @@ class MedSAM2NapariGUI(QWidget):
             ('Manual Edit', self.toggle_manual_annotation, 'manual_edit_button'),
             ('Edit Points', self.toggle_edit_user_pts, 'btn_edit_points'),
             ('Edit Boxes', self.toggle_edit_user_boxes, 'btn_edit_boxes'),
-            ('Toggle Object IDs', self.toggle_text_visibility, None),
             ('Propagate', self.propagate_prompt, None),
             ('Slice Propagate', self.slicewise_propagate_prompt, None),
-            ('3D Volume Render', lambda: render_auto_volume(self), None),
+            ('3D Volume Render', lambda: render_manual_volume(self), None),
             ('Prompt Undo', self.prompt_undo, None),
             ('Prompt Redo', self.prompt_redo, None),
             ('Mask Undo', self.mask_undo, None),
@@ -690,26 +512,41 @@ class MedSAM2NapariGUI(QWidget):
             ('t', self.toggle_edit_user_boxes),
             ('q', self.toggle_manual_annotation),
             ('k', self.toggle_edit_user_pts),
-            ('y', lambda: self._set_mask_opacity(0.0)),
+            ('y', self._toggle_mask_opacity),
             ('o', lambda: self._set_mask_opacity(1.0)),
             ('u', lambda: self._bump_mask_opacity(-0.1)),
             ('i', lambda: self._bump_mask_opacity(0.1)),
         ]
         for key, handler in keymap:
-            self.viewer.bind_key(key, lambda v, h=handler: h(), overwrite=True)
-        self.viewer.bind_key('s', lambda v: save_masks_auto(self))
-        self.viewer.bind_key('Control-Z', lambda v: self.prompt_undo())
-        self.viewer.bind_key('Control-Y', lambda v: self.prompt_redo())
-        self.viewer.bind_key('Control-X', lambda v: self.mask_undo())
-        self.viewer.bind_key('Control-U', lambda v: self.mask_redo())
-        self.viewer.bind_key('Control-S', lambda v: save_masks_auto(self))
-        self.viewer.bind_key('Ctrl+Z', lambda v: self.prompt_undo())
-        self.viewer.bind_key('Ctrl+Y', lambda v: self.prompt_redo())
-        self.viewer.bind_key('Ctrl+X', lambda v: self.mask_undo())
-        self.viewer.bind_key('Ctrl+U', lambda v: self.mask_redo())
-        self.viewer.bind_key('Ctrl+S', lambda v: save_masks_auto(self))
+            try:
+                self.viewer.bind_key(key, lambda v, h=handler: h(), overwrite=True, bind_global=True)
+            except TypeError:
+                self.viewer.bind_key(key, lambda v, h=handler: h(), overwrite=True)
+
+        def _bind_global(seq, fn, overwrite=False):
+            try:
+                self.viewer.bind_key(seq, lambda v: fn(), overwrite=overwrite, bind_global=True)
+            except TypeError:
+                self.viewer.bind_key(seq, lambda v: fn(), overwrite=overwrite)
+
+        _bind_global('s', lambda: save_masks_auto(self), overwrite=True)
+        _bind_global('Control-Z', self.prompt_undo)
+        _bind_global('Control-Y', self.prompt_redo)
+        _bind_global('Control-X', self.mask_undo)
+        _bind_global('Control-U', self.mask_redo)
+        _bind_global('Control-S', lambda: save_masks_auto(self))
+        _bind_global('Ctrl+Z', self.prompt_undo)
+        _bind_global('Ctrl+Y', self.prompt_redo)
+        _bind_global('Ctrl+X', self.mask_undo)
+        _bind_global('Ctrl+U', self.mask_redo)
+        _bind_global('Ctrl+S', lambda: save_masks_auto(self))
+        _bind_global('Alt+Z', self.mask_undo, overwrite=True)
+        _bind_global('Alt+Y', self.mask_redo, overwrite=True)
+        _bind_global('alt+z', self.mask_undo, overwrite=True)
+        _bind_global('alt+y', self.mask_redo, overwrite=True)
         if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
-            self.viewer.bind_key('n', lambda v: self.next_patient(), overwrite=True)
+            _bind_global('n', self.next_patient, overwrite=True)
+            _bind_global('b', self.prev_patient, overwrite=True)
 
     def _bind_qshortcuts(self):
         # Qt-level shortcuts to ensure undo/redo work even when dock widget has focus
@@ -720,17 +557,112 @@ class MedSAM2NapariGUI(QWidget):
             ('Ctrl+X', self.mask_undo),
             ('Ctrl+U', self.mask_redo),
             ('Ctrl+S', lambda: save_masks_auto(self)),
+            ('Alt+Z', self.mask_undo),
+            ('Alt+Y', self.mask_redo),
+            ('Alt+z', self.mask_undo),
+            ('Alt+y', self.mask_redo),
+            ('h', self.enable_add_user_pos),
+            ('j', self.enable_add_user_neg),
+            ('r', self.enable_add_user_box),
+            ('t', self.toggle_edit_user_boxes),
+            ('q', self.toggle_manual_annotation),
+            ('k', self.toggle_edit_user_pts),
+            ('y', self._toggle_mask_opacity),
+            ('u', lambda: self._bump_mask_opacity(-0.1)),
+            ('i', lambda: self._bump_mask_opacity(0.1)),
+            ('o', lambda: self._set_mask_opacity(1.0)),
+            ('s', lambda: save_masks_auto(self)),
+            ('n', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
+            ('b', self.prev_patient if getattr(self, 'navigation_manager', None) is not None else None),
+            ('h', self.enable_add_user_pos),
+            ('j', self.enable_add_user_neg),
+            ('r', self.enable_add_user_box),
+            ('t', self.toggle_edit_user_boxes),
+            ('q', self.toggle_manual_annotation),
+            ('k', self.toggle_edit_user_pts),
+            ('y', self._toggle_mask_opacity),
+            ('u', lambda: self._bump_mask_opacity(-0.1)),
+            ('i', lambda: self._bump_mask_opacity(0.1)),
+            ('o', lambda: self._set_mask_opacity(1.0)),
+            ('s', lambda: save_masks_auto(self)),
+            ('n', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
             ('H', self.enable_add_user_pos),
             ('J', self.enable_add_user_neg),
             ('R', self.enable_add_user_box),
             ('T', self.toggle_edit_user_boxes),
+            ('Q', self.toggle_manual_annotation),
+            ('K', self.toggle_edit_user_pts),
+            ('Y', self._toggle_mask_opacity),
+            ('U', lambda: self._bump_mask_opacity(-0.1)),
+            ('I', lambda: self._bump_mask_opacity(0.1)),
+            ('O', lambda: self._set_mask_opacity(1.0)),
+            ('S', lambda: save_masks_auto(self)),
             ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
+            ('B', self.prev_patient if getattr(self, 'navigation_manager', None) is not None else None),
         ]:
             if handler:
                 sc = QShortcut(QKeySequence(seq), self)
                 sc.setContext(Qt.ApplicationShortcut)
                 sc.activated.connect(handler)
                 self._qt_shortcuts.append(sc)
+        # Extra Alt shortcuts bound to viewer window/canvas to bypass OS menu focus stealing
+        alt_targets = []
+        try:
+            if hasattr(self.viewer, 'window'):
+                alt_targets.append(getattr(self.viewer.window, '_qt_window', None))
+                if hasattr(self.viewer.window, 'qt_viewer'):
+                    alt_targets.append(getattr(self.viewer.window.qt_viewer, 'canvas', None))
+                if hasattr(self.viewer.window, 'qt_viewer') and hasattr(self.viewer.window.qt_viewer, 'canvas'):
+                    alt_targets.append(getattr(self.viewer.window.qt_viewer.canvas, 'native', None))
+        except Exception:
+            pass
+        for tgt in alt_targets:
+            if not tgt:
+                continue
+            for seq, handler in [('Alt+Z', self.mask_undo), ('Alt+z', self.mask_undo), ('Alt+Y', self.mask_redo), ('Alt+y', self.mask_redo)]:
+                try:
+                    sc = QShortcut(QKeySequence(seq), tgt)
+                    sc.setContext(Qt.WidgetWithChildrenShortcut)
+                    sc.activated.connect(handler)
+                    self._qt_shortcuts.append(sc)
+                except Exception:
+                    pass
+
+    def _set_mask_opacity(self, value):
+        try:
+            value = float(np.clip(value, 0.0, 1.0))
+            self.mask_layer.opacity = value
+            if value > 0.0:
+                self._last_nonzero_mask_opacity = value
+                self.viewer.status = f"Mask opacity: {value:.2f}"
+            else:
+                self.viewer.status = "Mask opacity: off"
+        except Exception:
+            pass
+
+    def _bump_mask_opacity(self, delta):
+        try:
+            new_opacity = float(np.clip(self.mask_layer.opacity + delta, 0.0, 1.0))
+            self.mask_layer.opacity = new_opacity
+            if new_opacity > 0.0:
+                self._last_nonzero_mask_opacity = new_opacity
+            self.viewer.status = f"Mask opacity: {new_opacity:.2f}"
+        except Exception:
+            pass
+
+    def _toggle_mask_opacity(self):
+        try:
+            current = float(self.mask_layer.opacity)
+            if current > 0.0:
+                self._last_nonzero_mask_opacity = current
+                self.mask_layer.opacity = 0.0
+                self.viewer.status = "Mask opacity: off"
+            else:
+                restore = float(np.clip(getattr(self, '_last_nonzero_mask_opacity', 1.0), 0.0, 1.0)) or 1.0
+                self.mask_layer.opacity = restore
+                self.viewer.status = f"Mask opacity: {restore:.2f}"
+        except Exception:
+            pass
 
     def _attach_mode_guard(self, layer, allowed_modes=('select',)):
         def _on_mode_change(event=None):
@@ -757,13 +689,6 @@ class MedSAM2NapariGUI(QWidget):
             self._set_button_active(b, False)
         self._set_button_active(self.btn_edit_points, False)
         self._set_button_active(self.btn_edit_boxes, False)
-
-    def _set_mask_opacity(self, value):
-        try:
-            self.mask_layer.opacity = float(np.clip(value, 0.0, 1.0))
-            self.viewer.status = f"Mask opacity: {self.mask_layer.opacity:.2f}"
-        except Exception:
-            pass
 
     def _ensure_box_prompt(self, frame_idx, obj_id):
         # If no box prompt exists for this frame/obj, try to build one from current mask logits
@@ -811,14 +736,6 @@ class MedSAM2NapariGUI(QWidget):
         finally:
             self._updating_layers = False
 
-    def _bump_mask_opacity(self, delta):
-        try:
-            new_opacity = float(np.clip(self.mask_layer.opacity + delta, 0.0, 1.0))
-            self.mask_layer.opacity = new_opacity
-            self.viewer.status = f"Mask opacity: {new_opacity:.2f}"
-        except Exception:
-            pass
-
     def toggle_text_visibility(self):
         self.text_visible = not self.text_visible
         if hasattr(self, 'text_layer'):
@@ -839,8 +756,10 @@ class MedSAM2NapariGUI(QWidget):
     def cancel_prompt_mode(self, evt=None):
         self.img_layer.mouse_drag_callbacks.clear()
         self.mask_layer.mouse_drag_callbacks.clear()
-        self.auto_pts_layer.editable = False
-        self.auto_box_layer.editable = False
+        try:
+            self.user_box_layer.mouse_drag_callbacks.clear()
+        except Exception:
+            pass
         if self.active_tool == 'edit_pts':
             self.user_pts_layer.editable = False
         if self.active_tool == 'edit_boxes':
@@ -922,6 +841,9 @@ class MedSAM2NapariGUI(QWidget):
     def enable_add_user_box(self):
         if self.manual_edit_enabled:
             print("Manual Edit is active: box prompt creation is disabled.")
+            return
+        if self.active_tool == 'add_box':
+            self.cancel_prompt_mode()
             return
         if not self._activate_tool('add_box'):
             return
@@ -1022,25 +944,10 @@ class MedSAM2NapariGUI(QWidget):
             self.metrics.add_event('manual_edit_toggled', enabled=self.manual_edit_enabled)
 
     def toggle_edit_auto_pts(self):
-        self.cancel_prompt_mode()
-        self._select_layer(self.auto_pts_layer)
-        was_editable = self.auto_pts_layer.editable
-        self.auto_pts_layer.editable = not was_editable
-        if self.auto_pts_layer.editable:
-            print("Auto points editing enabled - you can move/delete auto points")
-        else:
-            print("Auto points editing disabled")
+        print("Auto points layer removed; use user points instead.")
 
     def toggle_edit_auto_boxes(self):
-        self.cancel_prompt_mode()
-        self._select_layer(self.auto_box_layer)
-        was_editable = self.auto_box_layer.editable
-        self.auto_box_layer.editable = not was_editable
-        if self.auto_box_layer.editable:
-            self.auto_box_layer.mode = 'select'
-            print("Auto boxes editing enabled - rectangles will maintain shape during editing")
-        else:
-            print("Auto boxes editing disabled")
+        print("Auto box layer removed; use user boxes instead.")
 
     def toggle_edit_user_pts(self):
         if self.manual_edit_enabled:
@@ -1062,6 +969,14 @@ class MedSAM2NapariGUI(QWidget):
         if self.manual_edit_enabled:
             print("Manual Edit is enabled; box editing is unavailable.")
             return
+        if self.active_tool == 'edit_boxes':
+            self.cancel_prompt_mode()
+            self.user_box_layer.editable = False
+            try:
+                self.user_box_layer.mode = 'select'
+            except Exception:
+                pass
+            return
         if not self._activate_tool('edit_boxes'):
             self.user_box_layer.editable = False
             try:
@@ -1080,76 +995,117 @@ class MedSAM2NapariGUI(QWidget):
 
     def update_prompt_layers(self):
         self._updating_layers = True
-        # Skip auto layers; user-facing layers are handled below
-        if self.auto_pts_layer is not None:
-            self.auto_pts_layer.data = np.empty((0,3), dtype=np.float64)
-            self.auto_pts_layer.face_color = []
-        auto_boxes = []
-        for frame_idx, objs in self.box_prompts.items():
-            for _, box in objs.items():
+        # Reset points layer to avoid napari size broadcast issues when length changes
+        try:
+            self.user_pts_layer.data = np.empty((0,3), dtype=np.float64)
+            self.user_pts_layer.face_color = []
+            self.user_pts_layer.size = 5
+        except Exception:
+            pass
+        # Build points directly from point_prompts (predicted + user edits)
+        user_pts, user_pt_colors, user_ids, user_labels = [], [], [], []
+        for frame_idx, objs in self.point_prompts.items():
+            for obj_id, pts_list in objs.items():
+                for pt_info in pts_list:
+                    if len(pt_info) >= 3:
+                        x, y, label = pt_info[:3]
+                        user_pts.append([int(frame_idx), int(y), int(x)])
+                        user_pt_colors.append('green' if label == 1 else 'red')
+                        user_ids.append(int(obj_id))
+                        user_labels.append(f"{ '+' if label==1 else '-' }{int(obj_id)}")
+        if user_pts:
+            self.user_pts_layer.data = np.array(user_pts, dtype=np.float64)
+            self.user_pts_layer.face_color = user_pt_colors
+            try:
+                self.user_pts_layer.properties = {'obj_id': np.array(user_ids, dtype=int)}
+                self.user_pts_layer.text = user_labels
+                self.user_pts_layer.text.color = 'white'
+                self.user_pts_layer.text.size = 10
+                self.user_pts_layer.text.anchor = 'upper left'
+                self.user_pts_layer.text.visible = True
                 try:
-                    if isinstance(box, (list, tuple)) and len(box) >= 4:
-                        coords = []
-                        for coord in box[:4]:
-                            if isinstance(coord, torch.Tensor):
-                                coord_val = coord.item()
-                            elif isinstance(coord, (int, float, np.integer, np.floating)):
-                                coord_val = float(coord)
-                            else:
-                                coord_val = None
-                                break
-                            coords.append(coord_val)
-                        if None not in coords:
-                            x1, y1, x2, y2 = coords
-                            if all(isinstance(c, (int, float)) for c in [x1, y1, x2, y2]):
-                                corners = self._box2corners(int(frame_idx), int(x1), int(y1), int(x2), int(y2))
-                                auto_boxes.append(corners)
-                                print(f"Added auto box for frame {frame_idx}: ({x1},{y1},{x2},{y2})")
+                    self.user_pts_layer.size = 5
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        else:
+            self.user_pts_layer.data = np.empty((0,3), dtype=np.float64)
+            self.user_pts_layer.face_color = []
+            try:
+                self.user_pts_layer.properties = {'obj_id': np.array([], dtype=int)}
+                self.user_pts_layer.text = []
+                try:
+                    self.user_pts_layer.size = 5
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # Build boxes directly from box_prompts
+        user_boxes = []
+        box_ids = []
+        for frame_idx, objs in self.box_prompts.items():
+            for obj_id, box in objs.items():
+                try:
+                    if isinstance(box, (list, tuple, np.ndarray, torch.Tensor)) and len(box) >= 4:
+                        box_vals = box.cpu().numpy().tolist() if isinstance(box, torch.Tensor) else (
+                            box.tolist() if isinstance(box, np.ndarray) else list(box)
+                        )
+                        x1, y1, x2, y2 = map(int, box_vals[:4])
+                        corners = self._box2corners(int(frame_idx), x1, y1, x2, y2)
+                        user_boxes.append(corners)
+                        box_ids.append(int(obj_id))
                     else:
                         print(f"Invalid box format for frame {frame_idx}: {box}")
                 except Exception as e:
                     print(f"Error processing box for frame {frame_idx}: {e}")
                     continue
-        if self.auto_box_layer is not None:
-            if auto_boxes:
-                self.auto_box_layer.data = np.array(auto_boxes, dtype=np.float64)
-                print(f"Updated auto_box_layer with {len(auto_boxes)} boxes")
-            else:
-                self.auto_box_layer.data = np.empty((0,4,3), dtype=np.float64)
-                print("No valid auto boxes found, setting empty data")
-        user_pts, user_pt_colors = [], []
-        for action in self.prompt_history:
-            if action[0] == 'add_pos_pt':
-                _, t, obj_id, x, y = action
-                user_pts.append([int(t), int(y), int(x)])
-                user_pt_colors.append('green')
-            elif action[0] == 'add_neg_pt':
-                _, t, obj_id, x, y = action
-                user_pts.append([int(t), int(y), int(x)])
-                user_pt_colors.append('red')
-        if user_pts:
-            self.user_pts_layer.data = np.array(user_pts, dtype=np.float64)
-            self.user_pts_layer.face_color = user_pt_colors
-        else:
-            self.user_pts_layer.data = np.empty((0,3), dtype=np.float64)
-            self.user_pts_layer.face_color = []
-        user_boxes = []
-        for action in self.prompt_history:
-            if action[0] == 'add_box':
-                _, t, obj_id, x1, y1, x2, y2 = action
-                corners = self._box2corners(int(t), int(x1), int(y1), int(x2), int(y2))
-                user_boxes.append(corners)
         if user_boxes:
             self.user_box_layer.data = np.array(user_boxes, dtype=np.float64)
+            try:
+                self.user_box_layer.properties = {'obj_id': np.array(box_ids, dtype=int)}
+                palette = ['magenta', 'cyan', 'yellow', 'orange', 'blue', 'green', 'white']
+                edge_colors = [palette[obj_id % len(palette)] for obj_id in box_ids]
+                self.user_box_layer.edge_color = edge_colors
+                self.user_box_layer.text = [f"ID:{oid}" for oid in box_ids]
+                self.user_box_layer.text.color = 'white'
+                self.user_box_layer.text.size = 10
+                self.user_box_layer.text.anchor = 'upper left'
+                self.user_box_layer.text.visible = True
+            except Exception:
+                pass
         else:
             self.user_box_layer.data = np.empty((0,4,3), dtype=np.float64)
+
         self._updating_layers = False
-        print(f"Updated prompt layers: {len(auto_pts)} auto points, {len(auto_boxes)} auto boxes, {len(user_pts)} user points, {len(user_boxes)} user boxes")
+        print(f"Updated prompt layers: {len(user_pts)} points, {len(user_boxes)} boxes")
+
+    def _format_patient_id(self, patient_id):
+        try:
+            pid = patient_id[0] if isinstance(patient_id, (list, tuple)) else patient_id
+        except Exception:
+            pid = patient_id
+        pid_str = '' if pid is None else str(pid)
+        if not pid_str:
+            return "Unknown"
+        norm = os.path.normpath(pid_str)
+        parts = norm.replace('\\', '/').split('/')
+        if len(parts) >= 2:
+            basename = parts[-1]
+            parent = '/'.join(parts[:-1])
+            return f"{basename} ({parent})"
+        return pid_str
 
     def _get_patient_display_name(self):
-        if isinstance(self.patient_id, (list, tuple)):
-            return str(self.patient_id[0])
-        return str(self.patient_id)
+        base = self._format_patient_id(self.patient_id)
+        try:
+            nav = getattr(self, 'navigation_manager', None)
+            if nav and getattr(nav, 'patient_index', None) is not None:
+                return f"Patient {nav.patient_index}: {base}"
+        except Exception:
+            pass
+        return base
 
     def prompt_undo(self):
         if not self.prompt_history:
@@ -1309,6 +1265,10 @@ class MedSAM2NapariGUI(QWidget):
                 avg_sec_per_slice=round((end_ts - prop_start) / slice_count, 4) if slice_count > 0 else None,
             )
             self.metrics.add_event('propagation_completed', frames_with_masks=len(propagated_frames))
+        try:
+            QMessageBox.information(self, 'Propagation Complete', f'Frames {start_idx}-{end_idx} 처리 완료 (마스크 {len(propagated_frames)}장).')
+        except Exception:
+            pass
 
     def slicewise_propagate_prompt(self):
         prop_start = time.time()
@@ -1322,6 +1282,7 @@ class MedSAM2NapariGUI(QWidget):
         total_neg = 0
         orig_labels = self.mask_layer.data.copy()
         prompt_modes = defaultdict(dict)  # frame_idx -> {obj_id: (has_pos, has_neg)}
+        auto_boxes_added = False
         for frame_idx in sorted(prompt_frames):
             # auto-generate box if none and there are prompts
             frame_points = self.point_prompts.get(frame_idx, {})
@@ -1333,7 +1294,8 @@ class MedSAM2NapariGUI(QWidget):
                 if not obj_ids_to_cover:
                     obj_ids_to_cover = {self.current_obj_id}
                 for oid in obj_ids_to_cover:
-                    self._ensure_box_prompt(frame_idx, oid)
+                    added = self._ensure_box_prompt(frame_idx, oid)
+                    auto_boxes_added = auto_boxes_added or added
                     pts_list = frame_points.get(oid, [])
                     has_pos = any(len(pt)>=3 and pt[2]==1 for pt in pts_list)
                     has_neg = any(len(pt)>=3 and pt[2]==0 for pt in pts_list)
@@ -1402,6 +1364,9 @@ class MedSAM2NapariGUI(QWidget):
                 QMessageBox.critical(self, 'Slice Propagation Error', f'Propagation failed at frame {frame_idx}: {e}')
                 return
 
+        if auto_boxes_added:
+            self.update_prompt_layers()
+
         if updated_frames:
             new_labels = orig_labels.copy()
             for fidx in updated_frames:
@@ -1443,6 +1408,10 @@ class MedSAM2NapariGUI(QWidget):
                 neg_points_used=total_neg,
             )
             self.metrics.add_event('propagation_completed_slicewise', frames_with_masks=len(updated_frames))
+        try:
+            QMessageBox.information(self, 'Slice Propagation Complete', f'총 {len(updated_frames)}개 슬라이스 업데이트 완료.')
+        except Exception:
+            pass
 
     def on_frame_change(self, val):
         self.frame_idx = val
@@ -1461,7 +1430,7 @@ class MedSAM2NapariGUI(QWidget):
         save_masks_auto(self)
 
     def render_3d_volume(self):
-        render_auto_volume(self)
+        render_manual_volume(self)
 
     def mask_undo(self):
         if not self.mask_history:
