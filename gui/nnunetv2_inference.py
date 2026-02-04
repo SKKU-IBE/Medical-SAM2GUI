@@ -44,6 +44,13 @@ def run_nnunetv2_inference(
         seg_mask: np.ndarray of shape (T, H, W) with integer labels.
     """
     model_path = _ensure_model_path(model_path)
+    if isinstance(device, str):
+        try:
+            device = torch.device(device)
+        except Exception as exc:
+            raise RuntimeError(f"Invalid device '{device}'. Use 'cuda' or 'cpu'.") from exc
+    if device.type == 'cuda' and not torch.cuda.is_available():
+        raise RuntimeError("CUDA device requested but torch.cuda.is_available() is False.")
     try:
         from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
     except Exception as exc:  # pragma: no cover - import error path
@@ -65,32 +72,67 @@ def run_nnunetv2_inference(
     if meta and isinstance(meta, dict):
         spacing = meta.get('spacing', None)
         if spacing is not None and len(spacing) >= 3:
-            # nnUNet expects (z, y, x)
-            spacing = tuple(float(s) for s in spacing[:3])
+            # SimpleITK spacing is (x, y, z); nnUNet expects (z, y, x)
+            spacing = (float(spacing[2]), float(spacing[1]), float(spacing[0]))
+    if spacing is None:
+        spacing = (1.0, 1.0, 1.0)
 
-    predictor = nnUNetPredictor(
-        tile_step_size=tile_step_size,
-        use_gaussian=True,
-        use_mirroring=True,
-        device=device,
-        perform_everything_on_device=True,
-        verbose=False,
-        verbose_preprocessing=False,
-        allow_tqdm=True
-    )
-    predictor.initialize_from_trained_model_folder(
-        model_path,
-        use_folds=folds if folds is not None else (0,),
-        checkpoint_name=checkpoint_name,
-    )
-
-    try:
-        # API returns a tuple (seg, probs) where seg is int array (Z, Y, X)
-        seg, _ = predictor.predict_from_ndarray(
-            np_vol,
-            original_spacing=spacing,
-            tiling=True,
+    def _build_predictor(use_mirroring=True, perform_everything_on_device=True, step_size=tile_step_size):
+        pred = nnUNetPredictor(
+            tile_step_size=step_size,
+            use_gaussian=True,
+            use_mirroring=use_mirroring,
+            device=device,
+            perform_everything_on_device=perform_everything_on_device,
+            verbose=False,
+            verbose_preprocessing=False,
+            allow_tqdm=False,
         )
+        pred.initialize_from_trained_model_folder(
+            model_path,
+            use_folds=folds if folds is not None else (0,),
+            checkpoint_name=checkpoint_name,
+        )
+        return pred
+
+    def _align_channels(pred, arr):
+        expected = None
+        try:
+            cfg = getattr(pred, 'configuration_manager', None)
+            if cfg and hasattr(cfg, 'normalization_schemes'):
+                expected = len(cfg.normalization_schemes)
+        except Exception:
+            expected = None
+        if expected and arr.shape[0] != expected:
+            if arr.shape[0] > expected:
+                arr = arr[:expected]
+            else:
+                pad = expected - arr.shape[0]
+                pad_block = np.repeat(arr[:1], pad, axis=0)
+                arr = np.concatenate([arr, pad_block], axis=0)
+        return arr, expected
+
+    def _predict(pred, arr):
+        if hasattr(pred, 'predict_from_ndarray'):
+            return pred.predict_from_ndarray(arr, original_spacing=spacing, tiling=True)[0]
+        return pred.predict_single_npy_array(arr, image_properties={'spacing': spacing}, save_or_return_probabilities=False)
+
+    # First attempt: mirroring on, on-device processing (fast path)
+    try:
+        predictor = _build_predictor(use_mirroring=True, perform_everything_on_device=True, step_size=tile_step_size)
+        np_vol_aligned, expected_channels = _align_channels(predictor, np_vol)
+        print(f"[nnUNetv2] device={device}, np_vol shape={np_vol_aligned.shape}, spacing={spacing}, expected_channels={expected_channels}")
+        seg = _predict(predictor, np_vol_aligned)
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        if ('out of memory' in msg or 'cuda out of memory' in msg or 'cudnn error' in msg):
+            # Retry with safer settings
+            predictor = _build_predictor(use_mirroring=False, perform_everything_on_device=False, step_size=0.25)
+            np_vol_aligned, expected_channels = _align_channels(predictor, np_vol)
+            print(f"[nnUNetv2][retry-lowmem] device={device}, np_vol shape={np_vol_aligned.shape}, spacing={spacing}, expected_channels={expected_channels}")
+            seg = _predict(predictor, np_vol_aligned)
+        else:
+            raise RuntimeError(f"nnUNetv2 inference failed: {exc}") from exc
     except Exception as exc:  # pragma: no cover - runtime error path
         raise RuntimeError(f"nnUNetv2 inference failed: {exc}") from exc
 

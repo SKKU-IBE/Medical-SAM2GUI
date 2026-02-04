@@ -27,6 +27,7 @@ class PatientNavigationManager:
         self.current_gui = None
         self.patient_index = 0
         self.user_inputs = {}
+        self.last_user_settings = None
         self.double_viewers = {}
         self.current_patient_idx = 0
         self.patient_list = discover_studies(data_root)
@@ -64,10 +65,11 @@ class PatientNavigationManager:
 
     def get_user_input_for_patient(self, patient_id):
         from gui.setup_dialogs import PatientInputDialog
-        dialog = PatientInputDialog(patient_id, self.patient_index)
+        dialog = PatientInputDialog(patient_id, self.patient_index, defaults=self.last_user_settings)
         if dialog.exec_() == dialog.Accepted:
             settings = dialog.get_settings()
             print(f"Patient {patient_id} - Mode: {settings['mode']}, Method: {settings['method']}, Preprocess: {settings['preprocess']}")
+            self.last_user_settings = settings
             return settings
         print(f"Patient {patient_id} skipped by user")
         return None

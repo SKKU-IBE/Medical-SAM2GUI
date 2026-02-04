@@ -2,6 +2,7 @@
 import time
 import numpy as np
 import torch
+import cv2
 from typing import Optional
 
 from gui.metrics import UsageMetricsRecorder
@@ -27,7 +28,9 @@ def auto_segmentation(
 
     with torch.no_grad():
         stage_start = time.time()
+        # Use raw volume for nnUNet inference, but keep resized stack for viewer/prompts
         imgs = pack['images']
+        imgs_nnunet = pack.get('images_nnunet', None)
         if imgs.ndim == 5:
             imgs = imgs.squeeze(0)
         patient_id = pack['meta']['patient']
@@ -87,18 +90,22 @@ def auto_segmentation(
             # seg_model == 'sam2_seg' -> 기존 SAM2 전파 흐름 유지
             if seg_model == 'nnUNetv2':
                 from gui.nnunetv2_inference import run_nnunetv2_inference
-
+                seg_input = imgs_nnunet if imgs_nnunet is not None else imgs
                 seg_mask = run_nnunetv2_inference(
-                    imgs=imgs,
+                    imgs=seg_input,
                     meta=meta,
                     model_path=nnunet_model_path,
                     device=device,
                 )
-                # seg_mask: (Z, H, W) with integer labels
+                # seg_mask: (Z, H_raw, W_raw) with integer labels
                 start_idx, end_idx = 0, seg_mask.shape[0] - 1
                 obj_ids = sorted(int(x) for x in np.unique(seg_mask) if x != 0)
+                target_h, target_w = imgs.shape[-2], imgs.shape[-1]
                 for z in range(seg_mask.shape[0]):
-                    slice_map = seg_mask[z]
+                    slice_map = seg_mask[z].astype(np.uint8)
+                    # Resize mask to viewer resolution (nearest)
+                    if slice_map.shape[0] != target_h or slice_map.shape[1] != target_w:
+                        slice_map = cv2.resize(slice_map, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
                     per_obj = {}
                     for oid in obj_ids:
                         mask = (slice_map == oid).astype(np.float32)
@@ -108,7 +115,7 @@ def auto_segmentation(
                         video_segments[z] = per_obj
                 results.append({
                     "patient_id": patient_id,
-                    "imgs": imgs.cpu(),
+                    "imgs": imgs.cpu(),  # viewer stack (resized)
                     "video_segments": video_segments,
                     "prompts": {},
                     "start_idx": start_idx,
