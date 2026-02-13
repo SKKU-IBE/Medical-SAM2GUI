@@ -16,7 +16,6 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtGui import QKeySequence
 from qtpy.QtCore import Qt
-import threading
 from PIL import Image
 
 from gui.rendering import render_manual_volume
@@ -49,7 +48,6 @@ class ManualPromptNapariGUI(QWidget):
         self.pos_points = []  # (t, obj_id, y, x)
         self.neg_points = []
         self.box_prompts = []  # (t, obj_id, x1, y1, x2, y2)
-        self._box_edit_timer = None
         self._updating_layers = False
 
         self.viewer = napari.Viewer(title=self._get_patient_display_name())
@@ -325,6 +323,23 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
 
+    def _is_left_mouse_button(self, event):
+        button = getattr(event, 'button', None)
+        if button is None:
+            return True
+        if isinstance(button, str):
+            return button.lower() == 'left'
+        name = getattr(button, 'name', None)
+        if isinstance(name, str):
+            return name.lower() == 'left'
+        value = getattr(button, 'value', None)
+        if isinstance(value, int):
+            return value == 1
+        try:
+            return int(button) == 1
+        except Exception:
+            return False
+
     def _set_button_active(self, btn, active):
         if not btn:
             return
@@ -393,7 +408,6 @@ class ManualPromptNapariGUI(QWidget):
             pass
 
     def _setup_manual_box_editing_events(self):
-        self._box_edit_timer = None
         @self.box_layer.events.data.connect
         def on_boxes_data_change():
             if not hasattr(self, 'box_layer') or not self.box_layer.editable:
@@ -402,10 +416,8 @@ class ManualPromptNapariGUI(QWidget):
                 return
             if getattr(self, '_updating_layers', False):
                 return
-            if self._box_edit_timer:
-                self._box_edit_timer.cancel()
-            self._box_edit_timer = threading.Timer(0.3, lambda: self._sync_manual_boxes_with_rectangle_constraint(record_history=True))
-            self._box_edit_timer.start()
+            # Keep box-layer mutation on the UI thread to avoid racey redraw artifacts.
+            self._sync_manual_boxes_with_rectangle_constraint(record_history=True)
         # store last known box prompts to detect manual edits even when constraints unchanged
         try:
             self._last_box_prompts_snapshot = list(self.box_prompts)
@@ -461,8 +473,8 @@ class ManualPromptNapariGUI(QWidget):
             for corners in self.box_layer.data:
                 if len(corners) >= 4:
                     frame_idx = int(corners[0][0])
-                    y1, x1 = int(corners[0][1]), int(corners[0][2])
-                    y2, x2 = int(corners[2][1]), int(corners[2][2])
+                    y1, x1 = float(corners[0][1]), float(corners[0][2])
+                    y2, x2 = float(corners[2][1]), float(corners[2][2])
                     x1, x2 = min(x1, x2), max(x1, x2)
                     y1, y2 = min(y1, y2), max(y1, y2)
                     reuse_obj_id = None
@@ -661,7 +673,10 @@ class ManualPromptNapariGUI(QWidget):
         self._set_button_active(self.btn_add_pos, True)
         self.add_mode = 'pos'
         def cb(layer, event):
-            if event.type != 'mouse_press': return
+            if event.type != 'mouse_press':
+                return
+            if not self._is_left_mouse_button(event):
+                return
             t = int(self.viewer.dims.current_step[0])
             y, x = map(int, event.position[1:])
             self.pos_points.append((t, self.current_obj_id, y, x))
@@ -682,7 +697,10 @@ class ManualPromptNapariGUI(QWidget):
         self._set_button_active(self.btn_add_neg, True)
         self.add_mode = 'neg'
         def cb(layer, event):
-            if event.type != 'mouse_press': return
+            if event.type != 'mouse_press':
+                return
+            if not self._is_left_mouse_button(event):
+                return
             t = int(self.viewer.dims.current_step[0])
             y, x = map(int, event.position[1:])
             self.neg_points.append((t, self.current_obj_id, y, x))
@@ -703,7 +721,8 @@ class ManualPromptNapariGUI(QWidget):
         self._select_layer(self.box_layer)
         self.box_layer.editable = True
         try:
-            self.box_layer.mode = 'add_rectangle'
+            # Avoid native add_rectangle handling + custom drag callback fighting each other.
+            self.box_layer.mode = 'pan_zoom'
         except Exception:
             pass
         self._set_button_active(self.btn_add_box, True)
@@ -720,6 +739,8 @@ class ManualPromptNapariGUI(QWidget):
         def cb(layer, event):
             etype = getattr(event, 'type', None)
             if etype == 'mouse_press':
+                if not self._is_left_mouse_button(event):
+                    return
                 temp_state['t'] = int(self.viewer.dims.current_step[0])
                 y0, x0 = map(int, event.position[1:])
                 temp_state['x0'], temp_state['y0'] = x0, y0
@@ -728,10 +749,6 @@ class ManualPromptNapariGUI(QWidget):
                 # clear redo stack on new user action
                 self.redo_history.clear()
             elif etype == 'mouse_move' and temp_state['active']:
-                try:
-                    self.box_layer.mode = 'add_rectangle'
-                except Exception:
-                    pass
                 y1, x1 = map(int, event.position[1:])
                 x1, x2 = sorted([temp_state['x0'], x1])
                 y1, y2 = sorted([temp_state['y0'], y1])
