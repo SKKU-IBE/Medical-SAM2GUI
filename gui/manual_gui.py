@@ -771,6 +771,9 @@ class ManualPromptNapariGUI(QWidget):
                 temp_state['t'] = None
                 temp_state['x0'] = None
                 temp_state['y0'] = None
+                # Exit box-add mode after one completed box to avoid drag callbacks
+                # interfering with subsequent pan/zoom interactions.
+                self.cancel_prompt_mode()
 
         self.box_layer.mouse_drag_callbacks.append(cb)
 
