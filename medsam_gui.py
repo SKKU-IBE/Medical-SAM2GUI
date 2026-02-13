@@ -1,6 +1,6 @@
 import sys
 import torch
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
+from qtpy.QtWidgets import QApplication, QDialog, QMessageBox
 
 from func_3d.utils import get_network
 from gui.navigation import run_napari_gui_with_navigation
