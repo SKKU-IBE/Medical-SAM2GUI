@@ -876,9 +876,6 @@ class MedSAM2NapariGUI(QWidget):
                 self.update_prompt_layers()
                 self._record_prompt_event('user_box', t, self.current_obj_id)
                 print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
-                # Exit box-add mode after one completed box to avoid drag callbacks
-                # interfering with subsequent pan/zoom interactions.
-                self.cancel_prompt_mode()
         self.mask_layer.mouse_drag_callbacks.clear()
         self.user_box_layer.mouse_drag_callbacks.clear()
         self.user_box_layer.mouse_drag_callbacks.append(cb)
