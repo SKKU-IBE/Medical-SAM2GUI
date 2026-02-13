@@ -35,7 +35,7 @@ def run_nnunetv2_inference(
         imgs: Tensor shaped [T, C, H, W] or [T, H, W]; T == depth.
         meta: Optional metadata; if contains 'spacing', it will be passed to the predictor.
         model_path: Trained nnUNetv2 model folder.
-        device: 'cuda' or 'cpu'.
+        device: 'cuda', 'mps', or 'cpu'.
         folds: folds to use; default (0,).
         checkpoint_name: which checkpoint to load from the model folder.
         tile_step_size: overlap for sliding window.
@@ -48,9 +48,11 @@ def run_nnunetv2_inference(
         try:
             device = torch.device(device)
         except Exception as exc:
-            raise RuntimeError(f"Invalid device '{device}'. Use 'cuda' or 'cpu'.") from exc
+            raise RuntimeError(f"Invalid device '{device}'. Use 'cuda', 'mps', or 'cpu'.") from exc
     if device.type == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError("CUDA device requested but torch.cuda.is_available() is False.")
+    if device.type == 'mps' and not torch.backends.mps.is_available():
+        raise RuntimeError("MPS device requested but torch.backends.mps.is_available() is False.")
     try:
         from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
     except Exception as exc:  # pragma: no cover - import error path

@@ -211,6 +211,13 @@ def apply_rotary_enc(
     # repeat freqs along seq_len dim to match k seq_len
     if repeat_freqs_k:
         r = xk_.shape[-2] // xq_.shape[-2]
-        freqs_cis = freqs_cis.repeat(*([1] * (freqs_cis.ndim - 2)), r, 1)
+        if freqs_cis.is_complex() and not torch.cuda.is_available():
+            freqs_cis_real = torch.view_as_real(freqs_cis)
+            freqs_cis_real = freqs_cis_real.repeat(
+                *([1] * (freqs_cis.ndim - 2)), r, 1, 1
+            )
+            freqs_cis = torch.view_as_complex(freqs_cis_real)
+        else:
+            freqs_cis = freqs_cis.repeat(*([1] * (freqs_cis.ndim - 2)), r, 1)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)
