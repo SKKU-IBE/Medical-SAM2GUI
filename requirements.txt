@@ -1,5 +1,5 @@
 # GUI & Visualization
-napari[all]
+napari>=0.6.6
 qtpy>=2.4.3
 pyqt6>=6.7.1
 pyvista
