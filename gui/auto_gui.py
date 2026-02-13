@@ -17,6 +17,7 @@ from qtpy.QtGui import QKeySequence
 from qtpy.QtCore import Qt
 from collections import deque, defaultdict
 import traceback
+import threading
 from scipy.ndimage import center_of_mass
 
 from gui.prompts import make_initial_label_stack, normalize_box_prompts, normalize_point_prompts
@@ -58,9 +59,6 @@ class MedSAM2NapariGUI(QWidget):
         self.first_user_prompt_ts = None
         self.manual_edit_started_at = None
         self.manual_edit_total_sec = 0.0
-        self._updating_layers = False
-        self._updating_user_boxes = False
-        self._box_edit_events_connected = False
         self.start_idx = start_idx
         self.end_idx = end_idx
         
@@ -160,7 +158,6 @@ class MedSAM2NapariGUI(QWidget):
         
         # Setup layer event callbacks
         self._setup_layer_callbacks()
-        self._setup_box_editing_events()
         
         self.update_prompt_layers()
         auto_box_count = sum(len(objs) for objs in self.box_prompts.values())
@@ -243,21 +240,23 @@ class MedSAM2NapariGUI(QWidget):
         finally:
             self._manual_stroke_active = False
             self._stroke_start_state = None
+        
+        self._setup_box_editing_events()
 
     def _setup_box_editing_events(self):
-        """Setup box editing events."""
-        if self._box_edit_events_connected:
-            return
-        self._box_edit_events_connected = True
-
+        """Setup box editing events - debounced data change detection"""
+        self._user_box_edit_timer = None
+            
         @self.user_box_layer.events.data.connect
         def on_user_boxes_data_change():
             if not hasattr(self, 'user_box_layer') or not self.user_box_layer.editable:
                 return
             if getattr(self, '_updating_user_boxes', False):
                 return
-            # Keep box-layer mutation on the UI thread to avoid racey redraw artifacts.
-            self._sync_user_boxes_with_rectangle_constraint()
+            if self._user_box_edit_timer:
+                self._user_box_edit_timer.cancel()
+            self._user_box_edit_timer = threading.Timer(0.3, self._sync_user_boxes_with_rectangle_constraint)
+            self._user_box_edit_timer.start()
 
     def _record_prompt_event(self, kind, frame_idx, obj_id):
         if not self.metrics or not self.metrics.is_active():
@@ -330,23 +329,6 @@ class MedSAM2NapariGUI(QWidget):
                     return 0
         return 1
 
-    def _is_left_mouse_button(self, event):
-        button = getattr(event, 'button', None)
-        if button is None:
-            return True
-        if isinstance(button, str):
-            return button.lower() == 'left'
-        name = getattr(button, 'name', None)
-        if isinstance(name, str):
-            return name.lower() == 'left'
-        value = getattr(button, 'value', None)
-        if isinstance(value, int):
-            return value == 1
-        try:
-            return int(button) == 1
-        except Exception:
-            return False
-
     def _sync_user_points_from_layer(self):
         if getattr(self, '_updating_layers', False) or not self.user_pts_layer.editable:
             return
@@ -393,8 +375,8 @@ class MedSAM2NapariGUI(QWidget):
                 if len(corners) < 4:
                     continue
                 t = int(corners[0][0])
-                y1, x1 = float(corners[0][1]), float(corners[0][2])
-                y2, x2 = float(corners[2][1]), float(corners[2][2])
+                y1, x1 = int(corners[0][1]), int(corners[0][2])
+                y2, x2 = int(corners[2][1]), int(corners[2][2])
                 x1, x2 = min(x1, x2), max(x1, x2)
                 y1, y2 = min(y1, y2), max(y1, y2)
                 obj_id = int(obj_ids_prop[i]) if obj_ids_prop is not None and len(obj_ids_prop) > i else int(self.current_obj_id)
@@ -815,10 +797,7 @@ class MedSAM2NapariGUI(QWidget):
         self._set_button_active(self.btn_add_neg, False)
         self._set_button_active(self.btn_add_box, False)
         def cb(layer, evt):
-            if evt.type != 'mouse_press':
-                return
-            if not self._is_left_mouse_button(evt):
-                return
+            if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
             y, x = map(int, evt.position[1:])
             if t not in self.point_prompts:
@@ -844,10 +823,7 @@ class MedSAM2NapariGUI(QWidget):
         self._set_button_active(self.btn_add_pos, False)
         self._set_button_active(self.btn_add_box, False)
         def cb(layer, evt):
-            if evt.type != 'mouse_press':
-                return
-            if not self._is_left_mouse_button(evt):
-                return
+            if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
             y, x = map(int, evt.position[1:])
             if t not in self.point_prompts:
@@ -874,8 +850,7 @@ class MedSAM2NapariGUI(QWidget):
         self._select_layer(self.user_box_layer)
         self.user_box_layer.editable = True
         try:
-            # Avoid native add_rectangle handling + custom callback fighting each other.
-            self.user_box_layer.mode = 'pan_zoom'
+            self.user_box_layer.mode = 'add_rectangle'
         except Exception:
             pass
         self._set_button_active(self.btn_add_box, True)
@@ -885,10 +860,7 @@ class MedSAM2NapariGUI(QWidget):
         def cb(layer, evt):
             if self.manual_edit_enabled:
                 return
-            if evt.type != 'mouse_press':
-                return
-            if not self._is_left_mouse_button(evt):
-                return
+            if evt.type != 'mouse_press': return
             t = int(self.viewer.dims.current_step[0])
             y, x = map(int, evt.position[1:])
             pts.append((x, y))
@@ -1080,7 +1052,7 @@ class MedSAM2NapariGUI(QWidget):
                         box_vals = box.cpu().numpy().tolist() if isinstance(box, torch.Tensor) else (
                             box.tolist() if isinstance(box, np.ndarray) else list(box)
                         )
-                        x1, y1, x2, y2 = [float(v) for v in box_vals[:4]]
+                        x1, y1, x2, y2 = map(int, box_vals[:4])
                         corners = self._box2corners(int(frame_idx), x1, y1, x2, y2)
                         user_boxes.append(corners)
                         box_ids.append(int(obj_id))
