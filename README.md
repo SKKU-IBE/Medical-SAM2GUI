@@ -40,30 +40,25 @@ Raw MRI can optionally undergo **N4 bias field correction** and **intensity norm
 
 ---
 
-## Installation (conda)
+## Installation (uv)
 
-1) Create environment with Qt handled by the solver:
+1) Install `uv`:
 
 ```bash
-conda create -y -n medsam -c conda-forge python=3.12 pyqt=5.15.* pyopengl pip
-conda activate medsam
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-2) Install PyTorch matching your GPU/driver. The commands below are examples; check your NVIDIA driver’s supported CUDA runtime and pick a matching torch build (or CPU-only):
+2) Sync dependencies from `pyproject.toml`:
 
 ```bash
-# CUDA 12.1
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# CUDA 11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-# CPU-only
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+uv sync
 ```
 
-3) Install project dependencies:
+3) (Optional, NVIDIA CUDA) replace torch wheels with a CUDA build:
 
 ```bash
-pip install -r requirements.txt
+# CUDA 12.1 example
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 4) Download model weights:
@@ -73,15 +68,14 @@ pip install -r requirements.txt
 
 Place it in the project root or update your path in `cfg.py`.
 
-Windows: identical steps in an Anaconda/Miniconda/Miniforge PowerShell prompt after activating the env. Linux users should ensure the installed NVIDIA driver supports the chosen CUDA runtime (`nvidia-smi`).
+Windows users can run the same `uv` commands in PowerShell. Linux users should ensure the installed NVIDIA driver supports the selected CUDA runtime (`nvidia-smi`).
 
 ---
 
 ## Quick start
 
 ```bash
-conda activate medsam
-python medsam_gui.py
+uv run python medsam_gui.py
 ```
 
 During setup, pick mode and data path. **Manual mode** uses user-supplied prompts (boxes/points) and propagation.  
@@ -249,7 +243,7 @@ This supports tasks such as tumor burden monitoring and rapid sanity-checking of
 
 - Import check (headless):
 ```bash
-python - <<'PY'
+uv run python - <<'PY'
 import dataloader, gui.navigation, gui.segmentation
 print("Imports OK")
 PY
@@ -260,7 +254,7 @@ PY
   - Windows: `nvidia-smi` in PowerShell
   - then verify CUDA with:
 ```bash
-python - <<'PY'
+uv run python - <<'PY'
 import torch
 print("CUDA available:", torch.cuda.is_available())
 print("CUDA device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
@@ -268,7 +262,7 @@ PY
 ```
 
 - GUI smoke test:
-  - `python medsam_gui.py`
+  - `uv run python medsam_gui.py`
   - load a sample DICOM/NIfTI folder and confirm that images, prompt layers, propagation, and saving run without errors.
 
 ---

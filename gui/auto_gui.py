@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import napari
 import time
-from PyQt5.QtWidgets import (
+from qtpy.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -13,8 +13,8 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QShortcut,
 )
-from PyQt5.QtGui import QKeySequence
-from PyQt5.QtCore import Qt
+from qtpy.QtGui import QKeySequence
+from qtpy.QtCore import Qt
 from collections import deque, defaultdict
 import traceback
 import threading
