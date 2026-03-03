@@ -41,7 +41,7 @@ class ManualPromptNapariGUI(QWidget):
         self.manual_edit_total_sec = 0.0
 
         self.n_frames = imgs.shape[0]
-        self.frame_idx = 0
+        self.frame_idx = int(self.n_frames // 2)
         self.current_obj_id = 1
 
         self.prompt_history = deque()
@@ -118,6 +118,7 @@ class ManualPromptNapariGUI(QWidget):
         self.viewer.window.add_dock_widget(self, area='right')
         self._setup_viewer_callbacks()
         self._setup_layer_callbacks()
+        self._set_current_frame(self.frame_idx)
         self.update_layers()
         self._bind_shortcuts()
         self._bind_qshortcuts()
@@ -258,6 +259,9 @@ class ManualPromptNapariGUI(QWidget):
             ('j', self.enable_add_negative),
             ('r', self.enable_add_box),
             ('q', self.toggle_manual_annotation),
+            ('p', self.enable_pen_tool),
+            ('e', self.enable_erase_tool),
+            ('f', self.enable_fill_tool),
             ('k', self.enable_edit_points),
             ('t', self.enable_edit_boxes),
             ('c', self.clear_all_prompts),
@@ -265,6 +269,8 @@ class ManualPromptNapariGUI(QWidget):
             ('o', lambda: self._set_mask_opacity(1.0)),
             ('u', lambda: self._bump_mask_opacity(-0.1)),
             ('i', lambda: self._bump_mask_opacity(0.1)),
+            ('Left', lambda: self._step_slice(-1)),
+            ('Right', lambda: self._step_slice(1)),
         ]
         def _bind_global(seq, fn, overwrite=True):
             try:
@@ -287,6 +293,8 @@ class ManualPromptNapariGUI(QWidget):
         _bind_global('Ctrl+S', self.save_masks, overwrite=True)
         _bind_global('Alt+Z', self.mask_undo, overwrite=True)
         _bind_global('Alt+Y', self.mask_redo, overwrite=True)
+        _bind_global('alt+z', self.mask_undo, overwrite=True)
+        _bind_global('alt+y', self.mask_redo, overwrite=True)
         if getattr(self, 'navigation_manager', None) is not None and hasattr(self, 'next_patient'):
             _bind_global('n', self.next_patient, overwrite=True)
             _bind_global('b', self.prev_patient, overwrite=True)
@@ -302,8 +310,15 @@ class ManualPromptNapariGUI(QWidget):
             ('Ctrl+S', self.save_masks),
             ('Alt+Z', self.mask_undo),
             ('Alt+Y', self.mask_redo),
+            ('Alt+z', self.mask_undo),
+            ('Alt+y', self.mask_redo),
             ('R', self.enable_add_box),
+            ('P', self.enable_pen_tool),
+            ('E', self.enable_erase_tool),
+            ('F', self.enable_fill_tool),
             ('T', self.enable_edit_boxes),
+            ('Left', lambda: self._step_slice(-1)),
+            ('Right', lambda: self._step_slice(1)),
             ('N', self.next_patient if getattr(self, 'navigation_manager', None) is not None else None),
             ('B', self.prev_patient if getattr(self, 'navigation_manager', None) is not None else None),
         ]:
@@ -603,18 +618,49 @@ class ManualPromptNapariGUI(QWidget):
         self.box_prompts.clear()
         self.prompt_history.clear()
         self.redo_history.clear()
+        self.cancel_prompt_mode()
+        self._set_prompt_layers_visibility(True)
         self._set_mask_data(np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8))
         self.update_layers()
+        self._focus_viewer_canvas()
         print("All prompts and masks cleared")
         if self.metrics and self.metrics.is_active():
             self.metrics.add_event('prompts_cleared')
 
     def on_frame_change(self, val):
-        self.frame_idx = val
+        self.frame_idx = int(val)
         current_step = list(self.viewer.dims.current_step)
-        current_step[0] = val
+        current_step[0] = int(val)
         self.viewer.dims.current_step = current_step
-        self.current_frame_label.setText(str(val))
+        self.current_frame_label.setText(str(int(val)))
+
+    def _set_current_frame(self, val):
+        val = int(np.clip(int(val), 0, self.n_frames - 1))
+        self.frame_idx = val
+        try:
+            self.frame_spin.blockSignals(True)
+            self.frame_spin.setValue(val)
+            self.frame_spin.blockSignals(False)
+        except Exception:
+            pass
+        try:
+            current_step = list(self.viewer.dims.current_step)
+            current_step[0] = val
+            self.viewer.dims.current_step = current_step
+        except Exception:
+            pass
+        try:
+            self.current_frame_label.setText(str(val))
+        except Exception:
+            pass
+
+    def _step_slice(self, delta):
+        try:
+            current = int(self.viewer.dims.current_step[0])
+        except Exception:
+            current = int(self.frame_idx)
+        self._set_current_frame(current + int(delta))
+        self._focus_viewer_canvas()
 
     def on_obj_change(self, val):
         self.current_obj_id = val
@@ -657,6 +703,7 @@ class ManualPromptNapariGUI(QWidget):
             return
         if not self._activate_tool('add_pos'):
             return
+        self._set_prompt_layers_visibility(True)
         self._select_layer(self.img_layer)
         self._set_button_active(self.btn_add_pos, True)
         self.add_mode = 'pos'
@@ -678,6 +725,7 @@ class ManualPromptNapariGUI(QWidget):
             return
         if not self._activate_tool('add_neg'):
             return
+        self._set_prompt_layers_visibility(True)
         self._select_layer(self.img_layer)
         self._set_button_active(self.btn_add_neg, True)
         self.add_mode = 'neg'
@@ -699,6 +747,7 @@ class ManualPromptNapariGUI(QWidget):
             return
         if not self._activate_tool('add_box'):
             return
+        self._set_prompt_layers_visibility(True)
         self._focus_mask_and_box_layers()
         self._select_layer(self.box_layer)
         self.box_layer.editable = True
@@ -787,6 +836,7 @@ class ManualPromptNapariGUI(QWidget):
             self.mask_layer.selected_label = self.current_obj_id
             self.box_layer.editable = True
             self.box_layer.mode = 'add_rectangle'
+            self._set_prompt_layers_visibility(False)
             self._select_layer(self.mask_layer)
             self._set_button_active(self.manual_edit_button, True)
             self.viewer.status = "Manual Edit ON"
@@ -813,6 +863,7 @@ class ManualPromptNapariGUI(QWidget):
         else:
             self.mask_layer.editable = False
             self.box_layer.editable = False
+            self._set_prompt_layers_visibility(True)
             self._set_button_active(self.manual_edit_button, False)
             self.viewer.status = "Manual Edit OFF"
             print("Manual annotation disabled.")
@@ -836,8 +887,47 @@ class ManualPromptNapariGUI(QWidget):
                 self.mask_layer.editable = True
                 self.mask_layer.mode = 'paint'
                 self.mask_layer.selected_label = self.current_obj_id
+                self._set_prompt_layers_visibility(False)
             except Exception:
                 pass
+
+    def _set_prompt_layers_visibility(self, visible):
+        try:
+            self.user_pts_layer.visible = bool(visible)
+        except Exception:
+            pass
+        try:
+            self.box_layer.visible = bool(visible)
+        except Exception:
+            pass
+
+    def _activate_manual_draw_mode(self, mode_name, status_text):
+        self.ensure_manual_edit_on()
+        self.cancel_prompt_mode()
+        try:
+            self.mask_layer.editable = True
+            self.mask_layer.selected_label = int(self.current_obj_id)
+        except Exception:
+            pass
+        try:
+            self.mask_layer.mode = mode_name
+        except Exception as e:
+            print(f"Failed to set manual mode '{mode_name}': {e}")
+        self._set_prompt_layers_visibility(False)
+        self.active_tool = f'manual_{mode_name}'
+        self._set_button_active(self.manual_edit_button, True)
+        self._select_layer(self.mask_layer)
+        self.viewer.status = status_text
+        self._focus_viewer_canvas()
+
+    def enable_pen_tool(self):
+        self._activate_manual_draw_mode('paint', 'Manual Pen ON')
+
+    def enable_erase_tool(self):
+        self._activate_manual_draw_mode('erase', 'Manual Erase ON')
+
+    def enable_fill_tool(self):
+        self._activate_manual_draw_mode('fill', 'Manual Fill ON')
 
     def enable_edit_points(self):
         if self.manual_edit_enabled:
@@ -851,6 +941,7 @@ class ManualPromptNapariGUI(QWidget):
             except Exception:
                 pass
             return
+        self._set_prompt_layers_visibility(True)
         self.user_pts_layer.editable = True
         self._select_layer(self.user_pts_layer)
         try:
@@ -872,6 +963,7 @@ class ManualPromptNapariGUI(QWidget):
             except Exception:
                 pass
             return
+        self._set_prompt_layers_visibility(True)
         self.box_layer.visible = True
         self.box_layer.editable = True
         self._select_layer(self.box_layer)
@@ -1024,6 +1116,7 @@ class ManualPromptNapariGUI(QWidget):
 
     def propagate_prompt(self):
         print("Synchronizing layer data before propagate...")
+        self.cancel_prompt_mode()
         prop_start = time.time()
         if hasattr(self, 'box_layer') and len(self.box_layer.data) > 0:
             self._sync_boxes_from_layer()
@@ -1105,6 +1198,8 @@ class ManualPromptNapariGUI(QWidget):
             self._update_object_id_text()
             print(f"Propagation completed. Generated masks for {len(result)} frames")
             QMessageBox.information(self, 'Done', f'Propagated {start}~{end}\nGenerated {len(result)} masks')
+            self._set_current_frame(self.frame_idx)
+            self._focus_viewer_canvas()
             if self.metrics and self.metrics.is_active():
                 end_ts = time.time()
                 slice_count = int(end - start + 1)
