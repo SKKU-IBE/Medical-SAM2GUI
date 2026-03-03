@@ -1118,7 +1118,24 @@ class ManualPromptNapariGUI(QWidget):
 
     def propagate_prompt(self):
         print("Synchronizing layer data before propagate...")
+        # Preserve manual-edit stroke callback across prompt-mode cancellation so that
+        # mask-history capture for subsequent manual strokes remains functional.
+        saved_manual_cb = None
+        manual_cb_was_attached = False
+        if hasattr(self, "_manual_edit_stroke_callback") and hasattr(self, "mask_layer"):
+            manual_cb = self._manual_edit_stroke_callback
+            mouse_cbs = getattr(self.mask_layer, "mouse_drag_callbacks", None)
+            if mouse_cbs is not None and manual_cb in mouse_cbs:
+                saved_manual_cb = manual_cb
+                manual_cb_was_attached = True
+
         self.cancel_prompt_mode()
+
+        # Re-attach manual-edit stroke callback if it was previously active.
+        if manual_cb_was_attached and hasattr(self, "mask_layer"):
+            mouse_cbs = getattr(self.mask_layer, "mouse_drag_callbacks", None)
+            if mouse_cbs is not None and saved_manual_cb is not None and saved_manual_cb not in mouse_cbs:
+                mouse_cbs.append(saved_manual_cb)
         prop_start = time.time()
         if hasattr(self, 'box_layer') and len(self.box_layer.data) > 0:
             self._sync_boxes_from_layer()
