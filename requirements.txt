@@ -1,6 +1,7 @@
 # GUI & Visualization
-# PyQt5  <-- Installed via Conda (Recommended for Linux)
-napari[all]
+napari>=0.6.6
+qtpy>=2.4.3
+pyqt6>=6.7.1
 pyvista
 matplotlib
 
@@ -18,6 +19,9 @@ scipy
 pandas
 
 # SAM2 & Model Utilities
+torch>=2.3.0
+torchvision>=0.18.0
+torchaudio>=2.3.0
 hydra-core>=1.3.2
 iopath
 tqdm

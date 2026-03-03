@@ -5,7 +5,7 @@ import numpy as np
 import napari
 import torch
 from PIL import Image
-from PyQt5.QtWidgets import (
+from qtpy.QtWidgets import (
     QApplication,
     QLabel,
     QHBoxLayout,

@@ -3,7 +3,7 @@ import traceback
 import numpy as np
 from skimage.measure import marching_cubes
 import pyvista as pv
-from PyQt5.QtWidgets import QMessageBox
+from qtpy.QtWidgets import QMessageBox
 
 
 def render_auto_volume(gui):
