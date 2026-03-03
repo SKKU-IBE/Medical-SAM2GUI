@@ -906,6 +906,18 @@ class ManualPromptNapariGUI(QWidget):
     def _activate_manual_draw_mode(self, mode_name, status_text):
         self.ensure_manual_edit_on()
         self.cancel_prompt_mode()
+        # Re-attach manual edit stroke callback if it was cleared by cancel_prompt_mode.
+        try:
+            if getattr(self, "manual_edit_enabled", False):
+                callback = getattr(self, "_manual_edit_stroke_callback", None)
+                mask_layer = getattr(self, "mask_layer", None)
+                if callback is not None and mask_layer is not None:
+                    mouse_drag_callbacks = getattr(mask_layer, "mouse_drag_callbacks", None)
+                    if mouse_drag_callbacks is not None and callback not in mouse_drag_callbacks:
+                        mouse_drag_callbacks.append(callback)
+        except Exception:
+            # Failure to re-attach the callback should not break the UI; fall back silently.
+            pass
         try:
             self.mask_layer.editable = True
             self.mask_layer.selected_label = int(self.current_obj_id)
