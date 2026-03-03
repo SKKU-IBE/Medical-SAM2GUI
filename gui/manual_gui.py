@@ -628,11 +628,7 @@ class ManualPromptNapariGUI(QWidget):
             self.metrics.add_event('prompts_cleared')
 
     def on_frame_change(self, val):
-        self.frame_idx = int(val)
-        current_step = list(self.viewer.dims.current_step)
-        current_step[0] = int(val)
-        self.viewer.dims.current_step = current_step
-        self.current_frame_label.setText(str(int(val)))
+        self._set_current_frame(int(val))
 
     def _set_current_frame(self, val):
         val = int(np.clip(int(val), 0, self.n_frames - 1))
@@ -906,6 +902,18 @@ class ManualPromptNapariGUI(QWidget):
     def _activate_manual_draw_mode(self, mode_name, status_text):
         self.ensure_manual_edit_on()
         self.cancel_prompt_mode()
+        # Re-attach manual edit stroke callback if it was cleared by cancel_prompt_mode.
+        try:
+            if getattr(self, "manual_edit_enabled", False):
+                callback = getattr(self, "_manual_edit_stroke_callback", None)
+                mask_layer = getattr(self, "mask_layer", None)
+                if callback is not None and mask_layer is not None:
+                    mouse_drag_callbacks = getattr(mask_layer, "mouse_drag_callbacks", None)
+                    if mouse_drag_callbacks is not None and callback not in mouse_drag_callbacks:
+                        mouse_drag_callbacks.append(callback)
+        except Exception as e:
+            # Failure to re-attach the callback should not break the UI; fall back silently.
+            print(f"Warning: could not re-attach manual stroke callback: {e}")
         try:
             self.mask_layer.editable = True
             self.mask_layer.selected_label = int(self.current_obj_id)
@@ -1118,7 +1126,24 @@ class ManualPromptNapariGUI(QWidget):
 
     def propagate_prompt(self):
         print("Synchronizing layer data before propagate...")
+        # Preserve manual-edit stroke callback across prompt-mode cancellation so that
+        # mask-history capture for subsequent manual strokes remains functional.
+        saved_manual_cb = None
+        manual_cb_was_attached = False
+        if hasattr(self, "_manual_edit_stroke_callback") and hasattr(self, "mask_layer"):
+            manual_cb = self._manual_edit_stroke_callback
+            mouse_cbs = getattr(self.mask_layer, "mouse_drag_callbacks", None)
+            if mouse_cbs is not None and manual_cb in mouse_cbs:
+                saved_manual_cb = manual_cb
+                manual_cb_was_attached = True
+
         self.cancel_prompt_mode()
+
+        # Re-attach manual-edit stroke callback if it was previously active.
+        if manual_cb_was_attached and hasattr(self, "mask_layer"):
+            mouse_cbs = getattr(self.mask_layer, "mouse_drag_callbacks", None)
+            if mouse_cbs is not None and saved_manual_cb is not None and saved_manual_cb not in mouse_cbs:
+                mouse_cbs.append(saved_manual_cb)
         prop_start = time.time()
         if hasattr(self, 'box_layer') and len(self.box_layer.data) > 0:
             self._sync_boxes_from_layer()
