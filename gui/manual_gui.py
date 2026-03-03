@@ -837,6 +837,8 @@ class ManualPromptNapariGUI(QWidget):
             self.box_layer.editable = True
             self.box_layer.mode = 'add_rectangle'
             self._set_prompt_layers_visibility(False)
+            # Ensure box layer remains visible so rectangles can be drawn/seen during manual edit
+            self.box_layer.visible = True
             self._select_layer(self.mask_layer)
             self._set_button_active(self.manual_edit_button, True)
             self.viewer.status = "Manual Edit ON"
