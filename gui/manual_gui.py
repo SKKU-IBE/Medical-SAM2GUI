@@ -628,11 +628,7 @@ class ManualPromptNapariGUI(QWidget):
             self.metrics.add_event('prompts_cleared')
 
     def on_frame_change(self, val):
-        self.frame_idx = int(val)
-        current_step = list(self.viewer.dims.current_step)
-        current_step[0] = int(val)
-        self.viewer.dims.current_step = current_step
-        self.current_frame_label.setText(str(int(val)))
+        self._set_current_frame(val)
 
     def _set_current_frame(self, val):
         val = int(np.clip(int(val), 0, self.n_frames - 1))
@@ -906,6 +902,13 @@ class ManualPromptNapariGUI(QWidget):
     def _activate_manual_draw_mode(self, mode_name, status_text):
         self.ensure_manual_edit_on()
         self.cancel_prompt_mode()
+        if getattr(self, 'manual_edit_enabled', False):
+            callback = getattr(self, '_manual_edit_stroke_callback', None)
+            mask_layer = getattr(self, 'mask_layer', None)
+            if callback is not None and mask_layer is not None:
+                cbs = getattr(mask_layer, 'mouse_drag_callbacks', None)
+                if cbs is not None and callback not in cbs:
+                    cbs.append(callback)
         try:
             self.mask_layer.editable = True
             self.mask_layer.selected_label = int(self.current_obj_id)
