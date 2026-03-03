@@ -628,11 +628,7 @@ class ManualPromptNapariGUI(QWidget):
             self.metrics.add_event('prompts_cleared')
 
     def on_frame_change(self, val):
-        self.frame_idx = int(val)
-        current_step = list(self.viewer.dims.current_step)
-        current_step[0] = int(val)
-        self.viewer.dims.current_step = current_step
-        self.current_frame_label.setText(str(int(val)))
+        self._set_current_frame(val)
 
     def _set_current_frame(self, val):
         val = int(np.clip(int(val), 0, self.n_frames - 1))
