@@ -200,7 +200,11 @@ class AsyncVideoFrameLoader:
         img -= self.img_mean
         img /= self.img_std
         if not self.offload_video_to_cpu:
-            img = img.cuda(non_blocking=True)
+            if torch.cuda.is_available():
+                img = img.cuda(non_blocking=True)
+            elif torch.backends.mps.is_available():
+                img = img.to("mps")
+            # else: keep on cpu
         self.images[index] = img
         return img
 
@@ -252,9 +256,14 @@ def load_video_frames(
     for n, img_path in enumerate(tqdm(img_paths, desc="frame loading (JPEG)")):
         images[n], video_height, video_width = _load_img_as_tensor(img_path, image_size)
     if not offload_video_to_cpu:
-        images = images.cuda()
-        img_mean = img_mean.cuda()
-        img_std = img_std.cuda()
+        if torch.cuda.is_available():
+            images = images.cuda()
+            img_mean = img_mean.cuda()
+            img_std = img_std.cuda()
+        elif torch.backends.mps.is_available():
+            images = images.to("mps")
+            img_mean = img_mean.to("mps")
+            img_std = img_std.to("mps")
     # normalize by mean and std
     images -= img_mean
     images /= img_std
@@ -283,9 +292,14 @@ def load_video_frames_from_data(
 
     images = imgs_tensor / 255.0
     if not offload_video_to_cpu:
-        images = images.cuda()
-        img_mean = img_mean.cuda()
-        img_std = img_std.cuda()
+        if torch.cuda.is_available():
+            images = images.cuda()
+            img_mean = img_mean.cuda()
+            img_std = img_std.cuda()
+        elif torch.backends.mps.is_available():
+            images = images.to("mps")
+            img_mean = img_mean.to("mps")
+            img_std = img_std.to("mps")
     # normalize by mean and std
     images -= img_mean
     images /= img_std

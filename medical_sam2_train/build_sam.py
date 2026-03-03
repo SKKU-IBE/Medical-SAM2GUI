@@ -15,11 +15,18 @@ from omegaconf import OmegaConf
 def build_sam2(
     config_file,
     ckpt_path=None,
-    device="cuda",
+    device=None,
     mode="eval",
     hydra_overrides_extra=[],
     apply_postprocessing=True,
 ):
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
 
     if apply_postprocessing:
         hydra_overrides_extra = hydra_overrides_extra.copy()
@@ -43,11 +50,18 @@ def build_sam2(
 def build_sam2_video_predictor(
     config_file,
     ckpt_path=None,
-    device="cuda",
+    device=None,
     mode="eval",
     hydra_overrides_extra=[],
     apply_postprocessing=True,
 ):
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     hydra_overrides = [
         "++model._target_=medical_sam2_train.sam2_video_predictor.SAM2VideoPredictor",
     ]

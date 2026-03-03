@@ -1,6 +1,6 @@
 import sys
 import torch
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
+from qtpy.QtWidgets import QApplication, QDialog, QMessageBox
 
 from func_3d.utils import get_network
 from gui.navigation import run_napari_gui_with_navigation
@@ -71,9 +71,22 @@ if __name__ == "__main__":
     )
 
     try:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        net = get_network(args, args.net, use_gpu=args.gpu, gpu_device=device, distribution=args.distributed)
-        net.to(dtype=torch.float32)
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+        print(f"Selecting device: {device}")
+        net = get_network(
+            args,
+            args.net,
+            use_gpu=(device != "cpu"),
+            gpu_device=device,
+            distribution=args.distributed,
+        )
+        net.to(device=device, dtype=torch.float32)
         print(f"Model loaded on {device}.")
     except Exception as e:
         QMessageBox.critical(None, "Loading Error", f"Error occurred while loading model:\n{str(e)}")

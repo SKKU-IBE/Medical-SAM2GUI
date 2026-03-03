@@ -249,12 +249,15 @@ class Attention(nn.Module):
 
         dropout_p = self.dropout_p if self.training else 0.0
         # Attention
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=USE_FLASH_ATTN,
-            # if Flash attention kernel is off, then math kernel needs to be enabled
-            enable_math=(OLD_GPU and dropout_p > 0.0) or MATH_KERNEL_ON,
-            enable_mem_efficient=OLD_GPU,
-        ):
+        if torch.cuda.is_available():
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=USE_FLASH_ATTN,
+                # if Flash attention kernel is off, then math kernel needs to be enabled
+                enable_math=(OLD_GPU and dropout_p > 0.0) or MATH_KERNEL_ON,
+                enable_mem_efficient=OLD_GPU,
+            ):
+                out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        else:
             out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
 
         out = self._recombine_heads(out)

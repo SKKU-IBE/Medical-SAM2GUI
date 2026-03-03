@@ -6,7 +6,7 @@ import time
 import SimpleITK as sitk
 from pathlib import Path
 from PIL import Image
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from qtpy.QtWidgets import QFileDialog, QMessageBox
 
 
 def _compute_voxel_volume(spacing):
