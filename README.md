@@ -172,6 +172,25 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 - `Propagate`: run Medical-SAM2 propagation using the prompted slice range.
 - Layer rule of thumb: add boxes on `mask, box layer`; add points on `image, point layer`; edit boxes/points only in their correction layers; manual painting/erasing happens on `mask, image layer` with `Manual Edit` enabled.
 
+### Keyboard shortcuts (manual workflow)
+
+- `Left` / `Right`: move slice from the **currently visible slice** (does not jump back to first slice).
+- Initial view opens at the **center slice** of the volume.
+- `P`: manual **Pen** (paint) mode ON immediately.
+- `E`: manual **Erase** mode ON immediately.
+- `F`: manual **Fill** mode ON immediately.
+  - Pressing `P`/`E`/`F` repeatedly is safe (mode remains active; no freeze/toggle-off behavior).
+  - When `P`/`E`/`F` is active, prompt layers are hidden to focus on manual editing.
+- `Q`: toggle manual edit ON/OFF.
+- `H` / `J`: add positive / negative point prompt.
+- `R`: add box prompt.
+- `K` / `T`: edit points / edit boxes.
+- `C`: clear prompts/masks.
+- `Y`: toggle mask opacity (on/off); `U` / `I`: decrease/increase opacity; `O`: set opacity to 1.0.
+- `Ctrl+Z` / `Ctrl+Y`: prompt undo/redo.
+- `Alt+Z` / `Alt+Y`: mask undo/redo.
+- `Ctrl+S`: save masks.
+
 ---
 
 ## Editing and QA (final correction)
@@ -183,10 +202,13 @@ Point prompts are used to refine a prediction on a slice (small additions/correc
 - Manual edit mode: brush/erase labels, adjust brush size, change object ID colors, and tweak mask opacity.
 - `Edit Points`: toggle editability of user point layer to move/delete points.
 - `Edit Boxes`: toggle editability of user box layer; rectangles keep shape during edits.
-- `Manual Edit`: enable/disable napari painting/rectangle drawing; enable this before making manual changes to avoid edit issues.
+- `Manual Edit`: enable/disable napari painting/rectangle drawing.
+- Fast manual editing: use `P`/`E`/`F` to jump directly into pen/erase/fill without pre-enabling manual mode.
 - `Clear All`: remove prompts/masks and reset history.
 - `Hide/Show Object IDs`: toggle object ID overlays.
 - `Undo`/`Redo`: prompt history management.
+
+After `Propagate` and confirmation, keyboard focus returns to the viewer so slice movement/inspection can continue immediately.
 
 **Recommended practice:** use prompts + propagation to obtain the best segmentation, then perform **final manual correction** and save. This keeps the workflow consistent and reproducible.
 
