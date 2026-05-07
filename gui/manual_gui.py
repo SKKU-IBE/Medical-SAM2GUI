@@ -414,7 +414,11 @@ class ManualPromptNapariGUI(QWidget):
         try:
             # After callbacks are cleared, assigning the same Labels mode can be a no-op
             # in napari. Bounce through pan/zoom so paint/erase/fill callbacks are restored.
-            if getattr(self.mask_layer, 'mode', None) == mode_name:
+            current_mode = getattr(self.mask_layer, 'mode', None)
+            current_mode = getattr(current_mode, 'value', current_mode)
+            current_mode = str(current_mode).lower()
+            mode_name = str(mode_name).lower()
+            if current_mode == mode_name or current_mode.endswith(f".{mode_name}"):
                 self.mask_layer.mode = 'pan_zoom'
             self.mask_layer.mode = mode_name
         except Exception as e:
@@ -682,7 +686,8 @@ class ManualPromptNapariGUI(QWidget):
 
     def cancel_prompt_mode(self, viewer=None):
         self.img_layer.mouse_drag_callbacks.clear()
-        self.mask_layer.mouse_drag_callbacks.clear()
+        if not getattr(self, 'manual_edit_enabled', False):
+            self.mask_layer.mouse_drag_callbacks.clear()
         try:
             self.box_layer.mouse_drag_callbacks.clear()
         except Exception:
