@@ -3,10 +3,15 @@ import numpy as np
 import torch
 import traceback
 import time
+import re
 import SimpleITK as sitk
 from pathlib import Path
 from PIL import Image
 from qtpy.QtWidgets import QFileDialog, QMessageBox
+
+
+_WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_DISPLAY_PATIENT_PREFIX = re.compile(r'^\s*patient\s+\d+\s*:\s*', re.IGNORECASE)
 
 
 def _compute_voxel_volume(spacing):
@@ -30,6 +35,49 @@ def _save_volume_report(patient_dir: Path, entries):
     report_path.write_text("".join(lines))
 
 
+def _strip_nii_extension(name):
+    lower = name.lower()
+    if lower.endswith('.nii.gz'):
+        return name[:-7]
+    if lower.endswith('.nii'):
+        return name[:-4]
+    return name
+
+
+def _safe_source_stem(value):
+    try:
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+    except Exception:
+        value = None
+    if value is None:
+        return "Unknown"
+
+    text = str(value).strip()
+    if not text:
+        return "Unknown"
+    text = _DISPLAY_PATIENT_PREFIX.sub('', text).strip()
+    if not text:
+        return "Unknown"
+
+    normalized = text.replace('\\', '/').rstrip('/ ')
+    basename = normalized.rsplit('/', 1)[-1] if normalized else text
+    stem = _strip_nii_extension(basename)
+    stem = _WINDOWS_FORBIDDEN_CHARS.sub('_', stem).strip(' .')
+    return stem or "Unknown"
+
+
+def _get_save_patient_stem(gui):
+    meta = getattr(gui, 'meta', None)
+    patient = None
+    if isinstance(meta, dict):
+        patient = meta.get('patient')
+    patient_stem = _safe_source_stem(patient)
+    if patient_stem != "Unknown":
+        return patient_stem
+    return _safe_source_stem(getattr(gui, 'patient_id', None))
+
+
 def save_masks_auto(gui):
     """Save masks from auto GUI."""
     try:
@@ -37,7 +85,8 @@ def save_masks_auto(gui):
         if not save_dir:
             return
         save_dir = Path(save_dir)
-        patient_dir = save_dir / f"{gui.patient_id}_masks"
+        patient_name = _get_save_patient_stem(gui)
+        patient_dir = save_dir / f"{patient_name}_masks"
         patient_dir.mkdir(exist_ok=True)
 
         mask_data = gui.mask_layer.data
@@ -95,7 +144,7 @@ def save_masks_auto(gui):
             mask_sitk.SetOrigin((0.0, 0.0, 0.0))
             mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
 
-        mask_path = patient_dir / f"{gui.patient_id}_full_mask.nii.gz"
+        mask_path = patient_dir / f"{patient_name}_full_mask.nii.gz"
         sitk.WriteImage(mask_sitk, str(mask_path))
 
         unique_labels = np.unique(mask_data)
@@ -129,7 +178,7 @@ def save_masks_auto(gui):
                 single_mask_sitk.SetOrigin((0.0, 0.0, 0.0))
                 single_mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
 
-            single_mask_path = patient_dir / f"{gui.patient_id}_mask_label_{label}.nii.gz"
+            single_mask_path = patient_dir / f"{patient_name}_mask_label_{label}.nii.gz"
             sitk.WriteImage(single_mask_sitk, str(single_mask_path))
             voxels = int(single_mask.sum())
             volume_entries.append((label, voxels, voxels * voxel_volume))
@@ -154,7 +203,7 @@ def save_masks_auto(gui):
                 'save_masks_auto',
                 save_start,
                 time.time(),
-                patient_id=str(gui.patient_id),
+                patient_id=str(patient_name),
                 labels_saved=int(saved_count),
                 slice_count=int(mask_data.shape[0]) if hasattr(mask_data, 'shape') else None,
                 save_dir=str(patient_dir),
@@ -176,7 +225,7 @@ def save_masks_manual(gui):
         if not save_dir:
             return
         save_dir = Path(save_dir)
-        patient_name = gui._get_patient_display_name()
+        patient_name = _get_save_patient_stem(gui)
         patient_dir = save_dir / f"{patient_name}_masks"
         patient_dir.mkdir(exist_ok=True)
 
