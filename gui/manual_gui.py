@@ -403,6 +403,27 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
 
+    def _ensure_manual_stroke_callback(self):
+        try:
+            if self._manual_edit_stroke_callback not in self.mask_layer.mouse_drag_callbacks:
+                self.mask_layer.mouse_drag_callbacks.append(self._manual_edit_stroke_callback)
+        except Exception:
+            pass
+
+    def _set_mask_draw_mode(self, mode_name):
+        try:
+            # After callbacks are cleared, assigning the same Labels mode can be a no-op
+            # in napari. Bounce through pan/zoom so paint/erase/fill callbacks are restored.
+            current_mode = getattr(self.mask_layer, 'mode', None)
+            current_mode = getattr(current_mode, 'value', current_mode)
+            current_mode = str(current_mode).lower()
+            mode_name = str(mode_name).lower()
+            if current_mode == mode_name or current_mode.endswith(f".{mode_name}"):
+                self.mask_layer.mode = 'pan_zoom'
+            self.mask_layer.mode = mode_name
+        except Exception as e:
+            print(f"Failed to set manual mode '{mode_name}': {e}")
+
     def _setup_manual_box_editing_events(self):
         self._box_edit_timer = None
         @self.box_layer.events.data.connect
@@ -665,7 +686,8 @@ class ManualPromptNapariGUI(QWidget):
 
     def cancel_prompt_mode(self, viewer=None):
         self.img_layer.mouse_drag_callbacks.clear()
-        self.mask_layer.mouse_drag_callbacks.clear()
+        if not getattr(self, 'manual_edit_enabled', False):
+            self.mask_layer.mouse_drag_callbacks.clear()
         try:
             self.box_layer.mouse_drag_callbacks.clear()
         except Exception:
@@ -842,12 +864,7 @@ class ManualPromptNapariGUI(QWidget):
             print("Manual annotation enabled: paint on 'mask, box layer' or draw rectangles in 'User Boxes correction layer'.")
             if self.metrics and self.metrics.is_active():
                 self.manual_edit_started_at = time.time()
-                try:
-                    # Ensure the stroke callback is attached only once
-                    if self._manual_edit_stroke_callback not in self.mask_layer.mouse_drag_callbacks:
-                        self.mask_layer.mouse_drag_callbacks.append(self._manual_edit_stroke_callback)
-                except Exception:
-                    pass
+            self._ensure_manual_stroke_callback()
             try:
                 current = self.mask_layer.data.copy()
                 self._push_mask_history(current)
@@ -884,9 +901,9 @@ class ManualPromptNapariGUI(QWidget):
             # Refresh selection/mode even when already on
             try:
                 self.mask_layer.editable = True
-                self.mask_layer.mode = 'paint'
                 self.mask_layer.selected_label = self.current_obj_id
                 self._set_prompt_layers_visibility(False)
+                self._ensure_manual_stroke_callback()
             except Exception:
                 pass
 
@@ -901,17 +918,15 @@ class ManualPromptNapariGUI(QWidget):
             pass
 
     def _activate_manual_draw_mode(self, mode_name, status_text):
-        self.ensure_manual_edit_on()
         self.cancel_prompt_mode()
+        self.ensure_manual_edit_on()
         try:
             self.mask_layer.editable = True
             self.mask_layer.selected_label = int(self.current_obj_id)
         except Exception:
             pass
-        try:
-            self.mask_layer.mode = mode_name
-        except Exception as e:
-            print(f"Failed to set manual mode '{mode_name}': {e}")
+        self._set_mask_draw_mode(mode_name)
+        self._ensure_manual_stroke_callback()
         self._set_prompt_layers_visibility(False)
         self.active_tool = f'manual_{mode_name}'
         self._set_button_active(self.manual_edit_button, True)
