@@ -1,7 +1,7 @@
 import argparse
 
 
-def parse_args():    
+def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('-net', type=str, default='sam2', help='net type')
     parser.add_argument('-encoder', type=str, default='vit_b', help='encoder type')
@@ -34,6 +34,6 @@ def parse_args():
     parser.add_argument('-version', type=str, default='Medical_sam2', help='version of the dataset')
     parser.add_argument('-plane', type=str, default='axial', help='the plane of the 3D image, axial, coronal or sagittal')
     parser.add_argument('-fold', type=int, default=None, help='the fold of the 5-fold cross validation')
-    opt = parser.parse_args()
+    opt = parser.parse_args(argv)
 
     return opt

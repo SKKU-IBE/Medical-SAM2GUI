@@ -12,7 +12,7 @@ from torch.autograd import Function
 
 import cfg
 
-args = cfg.parse_args()
+args = cfg.parse_args([])
 if torch.cuda.is_available():
     device = torch.device('cuda', args.gpu_device)
 elif torch.backends.mps.is_available():
