@@ -7,5 +7,5 @@ from .navigation import (
     run_napari_gui_with_navigation,
 )
 from .rendering import render_auto_volume, render_manual_volume
-from .io import save_masks_auto, save_masks_manual
+from .io import load_masks_manual, save_masks_auto, save_masks_manual
 from .segmentation import auto_segmentation

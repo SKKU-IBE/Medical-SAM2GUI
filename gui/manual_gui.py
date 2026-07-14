@@ -15,12 +15,20 @@ from qtpy.QtWidgets import (
     QShortcut,
 )
 from qtpy.QtGui import QKeySequence
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QTimer
 import threading
 from PIL import Image
 
 from gui.rendering import render_manual_volume
-from gui.io import save_masks_manual
+from gui.io import (
+    display_mask_to_source,
+    get_mask_geometry,
+    get_source_mask_shape,
+    load_masks_manual,
+    save_masks_manual,
+    source_mask_to_display,
+    sync_source_mask_slices,
+)
 
 
 class ManualPromptNapariGUI(QWidget):
@@ -60,6 +68,21 @@ class ManualPromptNapariGUI(QWidget):
         self.mask_layer = self.viewer.add_labels(
             np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8), name='Mask'
         )
+        source_shape = get_source_mask_shape(self.meta, self.mask_layer.data.shape)
+        if source_shape[0] != self.n_frames:
+            raise ValueError(
+                f"Source/display slice mismatch: {source_shape[0]} != {self.n_frames}"
+            )
+        self.source_mask_data = np.zeros(source_shape, dtype=np.int32)
+        self._slice_label_counts = [{} for _ in range(source_shape[0])]
+        self._volume_label_counts = {}
+        self._pending_source_slices = set()
+        self._pending_full_source_sync = False
+        self._volume_timer = QTimer(self)
+        self._volume_timer.setSingleShot(True)
+        self._volume_timer.setInterval(200)
+        self._volume_timer.timeout.connect(self._flush_volume_update)
+        self._setup_volume_overlay()
         try:
             # Track last non-zero opacity so toggle can restore it
             self._last_nonzero_mask_opacity = float(self.mask_layer.opacity)
@@ -87,6 +110,7 @@ class ManualPromptNapariGUI(QWidget):
         self.mask_history = deque()
         self.mask_redo_stack = deque()
         self._manual_stroke_active = False
+        self._manual_stroke_frame = None
         self._stroke_start_state = None
         self._suppress_box_history = False
         try:
@@ -122,6 +146,7 @@ class ManualPromptNapariGUI(QWidget):
         self.update_layers()
         self._bind_shortcuts()
         self._bind_qshortcuts()
+        self._update_volume_overlay_now()
         if self.metrics and self.metrics.is_active():
             self.metrics.add_event('manual_gui_initialized', n_frames=self.n_frames, patient_id=str(self.patient_id))
             self.metrics.set_info('n_frames', int(self.n_frames))
@@ -151,6 +176,137 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
         return base
+
+    def _setup_volume_overlay(self):
+        try:
+            overlay = self.viewer.text_overlay
+            overlay.visible = True
+            overlay.position = 'top_right'
+            overlay.font_size = 10
+            overlay.color = 'white'
+            overlay.text = 'Volumes\nNo mask'
+            self.volume_overlay = overlay
+        except Exception as exc:
+            self.volume_overlay = None
+            print(f"Volume overlay setup failed: {exc}")
+
+    def _schedule_volume_update(self, slice_indices=None, full_sync=False):
+        if full_sync:
+            self._pending_full_source_sync = True
+            self._pending_source_slices.clear()
+        elif not self._pending_full_source_sync and slice_indices is not None:
+            self._pending_source_slices.update(int(v) for v in slice_indices)
+        self._volume_timer.start(200)
+
+    def _sync_source_mask_from_display(self, slice_indices=None):
+        display_mask = np.asarray(self.mask_layer.data)
+        if slice_indices is None:
+            self.source_mask_data = display_mask_to_source(
+                display_mask, self.source_mask_data.shape
+            )
+            self._rebuild_volume_count_cache()
+        else:
+            slice_indices = sorted({int(v) for v in slice_indices})
+            self.source_mask_data = sync_source_mask_slices(
+                self.source_mask_data, display_mask, slice_indices
+            )
+            self._update_volume_count_cache_slices(slice_indices)
+
+    @staticmethod
+    def _positive_label_counts(array):
+        labels, counts = np.unique(np.asarray(array), return_counts=True)
+        return {
+            int(label): int(count)
+            for label, count in zip(labels, counts)
+            if int(label) > 0
+        }
+
+    def _rebuild_volume_count_cache(self):
+        self._slice_label_counts = []
+        aggregate = defaultdict(int)
+        for source_slice in self.source_mask_data:
+            slice_counts = self._positive_label_counts(source_slice)
+            self._slice_label_counts.append(slice_counts)
+            for label, count in slice_counts.items():
+                aggregate[label] += count
+        self._volume_label_counts = dict(aggregate)
+
+    def _update_volume_count_cache_slices(self, slice_indices):
+        aggregate = defaultdict(int, self._volume_label_counts)
+        for z_index in slice_indices:
+            if not 0 <= z_index < len(self._slice_label_counts):
+                continue
+            for label, count in self._slice_label_counts[z_index].items():
+                aggregate[label] -= count
+            slice_counts = self._positive_label_counts(self.source_mask_data[z_index])
+            self._slice_label_counts[z_index] = slice_counts
+            for label, count in slice_counts.items():
+                aggregate[label] += count
+        self._volume_label_counts = {
+            label: count for label, count in aggregate.items() if count > 0
+        }
+
+    def _flush_volume_update(self):
+        try:
+            if self._pending_full_source_sync:
+                self._sync_source_mask_from_display()
+            elif self._pending_source_slices:
+                self._sync_source_mask_from_display(self._pending_source_slices)
+        finally:
+            self._pending_full_source_sync = False
+            self._pending_source_slices.clear()
+        self._update_volume_overlay_now()
+
+    def flush_source_mask_updates(self):
+        if getattr(self, '_manual_stroke_active', False):
+            stroke_frame = getattr(self, '_manual_stroke_frame', None)
+            if stroke_frame is None:
+                stroke_frame = self.frame_idx
+            if not self._pending_full_source_sync:
+                self._pending_source_slices.add(int(stroke_frame))
+        if self._volume_timer.isActive():
+            self._volume_timer.stop()
+        self._flush_volume_update()
+        return self.source_mask_data
+
+    def set_source_mask_data(self, source_mask, record_history=True):
+        source_mask = np.asarray(source_mask, dtype=np.int32)
+        if source_mask.shape != self.source_mask_data.shape:
+            raise ValueError(
+                f"Source mask shape {source_mask.shape} does not match {self.source_mask_data.shape}."
+            )
+        display_mask = source_mask_to_display(source_mask, self.mask_layer.data.shape)
+        self._set_mask_data(
+            display_mask,
+            record_history=record_history,
+            source_data=source_mask,
+        )
+
+    def _update_volume_overlay_now(self):
+        if self.volume_overlay is None:
+            return
+        try:
+            _, spacing, _, _ = get_mask_geometry(self.meta, self.mask_layer.data.shape)
+            voxel_volume = float(np.prod(spacing))
+            entries = [
+                (object_id, voxel_count, voxel_count * voxel_volume)
+                for object_id, voxel_count in sorted(self._volume_label_counts.items())
+            ]
+            lines = ['Volumes (source grid)']
+            total = 0.0
+            for object_id, _, volume_mm3 in entries:
+                total += volume_mm3
+                lines.append(
+                    f"Obj {object_id}: {volume_mm3:,.2f} mm3 ({volume_mm3 / 1000.0:,.3f} mL)"
+                )
+            if entries:
+                lines.append(f"Total: {total:,.2f} mm3 ({total / 1000.0:,.3f} mL)")
+            else:
+                lines.append('No mask')
+            self.volume_overlay.text = '\n'.join(lines)
+            self.volume_overlay.visible = True
+        except Exception as exc:
+            print(f"Volume overlay update failed: {exc}")
 
     def _setup_viewer_callbacks(self):
         @self.viewer.dims.events.current_step.connect
@@ -190,6 +346,7 @@ class ManualPromptNapariGUI(QWidget):
                 self._last_mask_state = current
             except Exception:
                 pass
+            self._schedule_volume_update(slice_indices=[self.frame_idx])
             if self.metrics and self.metrics.is_active():
                 self.metrics.inc_counter('manual_edit_strokes', 1)
                 self.metrics.add_event('manual_edit_stroke', frame=int(self.frame_idx))
@@ -199,6 +356,22 @@ class ManualPromptNapariGUI(QWidget):
                 getattr(self.mask_layer.events, _evt).connect(_on_mask_change)
             except Exception:
                 pass
+        try:
+            self.mask_layer.events.labels_update.connect(
+                self._on_manual_labels_update
+            )
+        except Exception as exc:
+            print(f"Labels update tracking unavailable: {exc}")
+
+    def _on_manual_labels_update(self, event=None):
+        if not getattr(self, 'manual_edit_enabled', False):
+            return
+        if getattr(self, '_updating_layers', False):
+            return
+        stroke_frame = getattr(self, '_manual_stroke_frame', None)
+        if stroke_frame is None:
+            stroke_frame = self.frame_idx
+        self._schedule_volume_update(slice_indices=[int(stroke_frame)])
 
     def _manual_edit_stroke_callback(self, layer, event):
         if not getattr(self, 'manual_edit_enabled', False):
@@ -206,21 +379,37 @@ class ManualPromptNapariGUI(QWidget):
         if getattr(self, '_updating_layers', False):
             return
         self._manual_stroke_active = True
+        self._manual_stroke_frame = int(self.frame_idx)
         try:
             self._stroke_start_state = self.mask_layer.data.copy()
         except Exception:
             self._stroke_start_state = None
-        yield
         try:
+            yield
+            while event.type == 'mouse_move':
+                yield
             new_state = self.mask_layer.data.copy()
-            if self._stroke_start_state is not None and not np.array_equal(new_state, self._stroke_start_state):
+            changed = (
+                self._stroke_start_state is not None
+                and not np.array_equal(new_state, self._stroke_start_state)
+            )
+            if changed:
                 self._push_mask_history(self._stroke_start_state.copy())
                 self.mask_redo_stack.clear()
             self._last_mask_state = new_state
+            self._schedule_volume_update(
+                slice_indices=[self._manual_stroke_frame]
+            )
+            if changed and self.metrics and self.metrics.is_active():
+                self.metrics.inc_counter('manual_edit_strokes', 1)
+                self.metrics.add_event(
+                    'manual_edit_stroke', frame=int(self._manual_stroke_frame)
+                )
         except Exception:
             pass
         finally:
             self._manual_stroke_active = False
+            self._manual_stroke_frame = None
             self._stroke_start_state = None
 
     def _select_layer(self, layer):
@@ -368,7 +557,7 @@ class ManualPromptNapariGUI(QWidget):
         while len(self.mask_history) > MAX_LEN:
             self.mask_history.popleft()
 
-    def _set_mask_data(self, new_data, record_history=True):
+    def _set_mask_data(self, new_data, record_history=True, source_data=None):
         try:
             if record_history and self._last_mask_state is not None:
                 self._push_mask_history(self._last_mask_state.copy())
@@ -378,6 +567,39 @@ class ManualPromptNapariGUI(QWidget):
             self._last_mask_state = self.mask_layer.data.copy()
         finally:
             self._updating_layers = False
+        if source_data is None:
+            self._sync_source_mask_from_display()
+        else:
+            source_data = np.asarray(source_data, dtype=np.int32)
+            if source_data.shape != self.source_mask_data.shape:
+                raise ValueError(
+                    f"Source mask shape {source_data.shape} does not match {self.source_mask_data.shape}."
+                )
+            self.source_mask_data = source_data.copy()
+            self._rebuild_volume_count_cache()
+        self._pending_full_source_sync = False
+        self._pending_source_slices.clear()
+        self._schedule_volume_update()
+
+    @staticmethod
+    def _merge_propagated_masks(existing_mask, result, prompted_object_ids):
+        merged = np.asarray(existing_mask).copy()
+        prompted_object_ids = {int(v) for v in prompted_object_ids}
+        for frame_index, propagated_frame in result.items():
+            frame_index = int(frame_index)
+            if not 0 <= frame_index < merged.shape[0]:
+                continue
+            propagated_frame = np.asarray(propagated_frame)
+            if propagated_frame.shape != merged[frame_index].shape:
+                raise ValueError(
+                    f"Propagated frame shape {propagated_frame.shape} does not match "
+                    f"mask frame shape {merged[frame_index].shape}."
+                )
+            frame = merged[frame_index]
+            for object_id in prompted_object_ids:
+                frame[frame == object_id] = 0
+            frame[propagated_frame > 0] = propagated_frame[propagated_frame > 0]
+        return merged
 
     def _bump_mask_opacity(self, delta):
         try:
@@ -405,8 +627,10 @@ class ManualPromptNapariGUI(QWidget):
 
     def _ensure_manual_stroke_callback(self):
         try:
-            if self._manual_edit_stroke_callback not in self.mask_layer.mouse_drag_callbacks:
-                self.mask_layer.mouse_drag_callbacks.append(self._manual_edit_stroke_callback)
+            callbacks = self.mask_layer.mouse_drag_callbacks
+            if self._manual_edit_stroke_callback in callbacks:
+                callbacks.remove(self._manual_edit_stroke_callback)
+            callbacks.insert(0, self._manual_edit_stroke_callback)
         except Exception:
             pass
 
@@ -615,6 +839,7 @@ class ManualPromptNapariGUI(QWidget):
             ('Prompt Redo', self.prompt_redo, None),
             ('Mask Undo',   self.mask_undo, None),
             ('Mask Redo',   self.mask_redo, None),
+            ('Load Masks',  lambda: load_masks_manual(self), None),
             ('Save Masks',  lambda: save_masks_manual(self), None)
         ]
         for label, func, attr in btns:
@@ -1144,7 +1369,6 @@ class ManualPromptNapariGUI(QWidget):
             return
         start, end = min(idxs), max(idxs)
         print(f"Propagating from frame {start} to {end}...")
-        self._set_mask_data(np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8))
         sub = self.imgs[start:end+1].to(self.device)
         with torch.no_grad():
             state = self.net.val_init_state(imgs_tensor=sub)
@@ -1186,14 +1410,20 @@ class ManualPromptNapariGUI(QWidget):
                         clear_old_points=False
                     )
             result = {}
+            prompted_object_ids = {
+                int(oid)
+                for t, oid, *_ in self.box_prompts + self.pos_points + self.neg_points
+                if start <= t <= end
+            }
             try:
                 for lt, oids, logits in self.net.propagate_in_video(state, start_frame_idx=0):
                     gi = start + lt
                     if len(logits) > 0 and len(oids) > 0:
-                        frame_mask = np.zeros(logits[0].shape, dtype=np.uint8)
+                        first_mask = np.squeeze(logits[0].detach().cpu().numpy())
+                        frame_mask = np.zeros(first_mask.shape, dtype=np.int32)
                         for oid, logit in zip(oids, logits):
-                            obj_mask = (logit.cpu().numpy() > 0.5).astype(np.uint8)
-                            frame_mask[obj_mask > 0] = oid
+                            obj_mask = np.squeeze(logit.detach().cpu().numpy()) > 0.5
+                            frame_mask[obj_mask] = int(oid)
                         result[gi] = frame_mask
                         print(f"  Generated mask for frame {gi} with {len(oids)} objects: {oids}")
             except Exception as e:
@@ -1205,9 +1435,9 @@ class ManualPromptNapariGUI(QWidget):
             finally:
                 self.net.reset_state(state)
                 del state
-            new_mask = np.zeros((self.n_frames,) + self.imgs.shape[2:], dtype=np.uint8)
-            for i, m in result.items():
-                new_mask[i] = m
+            new_mask = self._merge_propagated_masks(
+                self.mask_layer.data, result, prompted_object_ids
+            )
             self._set_mask_data(new_mask)
             self._update_object_id_text()
             print(f"Propagation completed. Generated masks for {len(result)} frames")
@@ -1235,6 +1465,9 @@ class ManualPromptNapariGUI(QWidget):
     def save_masks(self):
         save_masks_manual(self)
 
+    def load_masks(self):
+        load_masks_manual(self)
+
     def render_3d_volume(self):
         render_manual_volume(self)
 
@@ -1250,6 +1483,10 @@ class ManualPromptNapariGUI(QWidget):
             self._last_mask_state = self.mask_layer.data.copy()
         finally:
             self._updating_layers = False
+        self._sync_source_mask_from_display()
+        self._pending_full_source_sync = False
+        self._pending_source_slices.clear()
+        self._schedule_volume_update()
 
     def mask_redo(self):
         if not self.mask_redo_stack:
@@ -1263,3 +1500,7 @@ class ManualPromptNapariGUI(QWidget):
             self._last_mask_state = self.mask_layer.data.copy()
         finally:
             self._updating_layers = False
+        self._sync_source_mask_from_display()
+        self._pending_full_source_sync = False
+        self._pending_source_slices.clear()
+        self._schedule_volume_update()
