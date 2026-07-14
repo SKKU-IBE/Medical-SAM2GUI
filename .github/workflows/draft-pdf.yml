@@ -1,0 +1,41 @@
+name: Draft PDF
+
+on:
+  push:
+    paths:
+      - paper.md
+      - paper.bib
+      - "images/**"
+      - MEDIA_PROVENANCE.md
+      - .github/workflows/draft-pdf.yml
+  pull_request:
+    paths:
+      - paper.md
+      - paper.bib
+      - "images/**"
+      - MEDIA_PROVENANCE.md
+      - .github/workflows/draft-pdf.yml
+
+permissions:
+  contents: read
+
+jobs:
+  paper:
+    name: Paper Draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Build draft PDF
+        uses: openjournals/openjournals-draft-action@85a18372e48f551d8af9ddb7a747de685fbbb01c # v1.0
+        with:
+          journal: joss
+          paper-path: paper.md
+
+      - name: Upload PDF
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: paper
+          path: paper.pdf

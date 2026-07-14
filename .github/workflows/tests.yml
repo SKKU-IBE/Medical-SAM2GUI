@@ -1,0 +1,67 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - "agent/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: windows-latest
+            python-version: "3.12"
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYVISTA_OFF_SCREEN: "true"
+      MPLBACKEND: Agg
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libgl1 libxkbcommon-x11-0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Sync locked environment
+        run: uv sync --frozen --python ${{ matrix.python-version }}
+
+      - name: Run tests
+        run: uv run --python ${{ matrix.python-version }} pytest -q
+
+      - name: Check console entry points
+        run: |
+          uv run --python ${{ matrix.python-version }} medical-sam2-gui --help
+          uv run --python ${{ matrix.python-version }} medical-sam2-download-checkpoint --help
+
+      - name: Build source and wheel distributions
+        run: uv build
+
+      - name: Smoke-test installed wheel entry points
+        run: |
+          uv run --isolated --no-project --with ./dist/medical_sam2_gui-1.1.0-py3-none-any.whl medical-sam2-gui --help
+          uv run --isolated --no-project --with ./dist/medical_sam2_gui-1.1.0-py3-none-any.whl medical-sam2-download-checkpoint --help
