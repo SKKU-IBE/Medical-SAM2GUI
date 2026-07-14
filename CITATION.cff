@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite this release and the related preprint."
+title: "Interactive Medical-SAM2 GUI: A Napari-based semi-automatic annotation tool for medical images"
+type: software
+authors:
+  - family-names: Hong
+    given-names: Woojae
+  - family-names: Hwang
+    given-names: Jong Ha
+  - family-names: Chung
+    given-names: Jiyong
+  - family-names: Choi
+    given-names: Joongyeon
+  - family-names: Kim
+    given-names: Hyunggun
+  - family-names: Kim
+    given-names: Yong Hwy
+version: 1.1.0
+date-released: 2026-07-14
+repository-code: "https://github.com/SKKU-IBE/Medical-SAM2GUI"
+url: "https://github.com/SKKU-IBE/Medical-SAM2GUI"
+license: GPL-3.0-only
+abstract: >-
+  A local-first Napari application for cohort discovery, prompt-based Medical-SAM2
+  propagation, source-grid mask correction, resumable label-map editing, and
+  geometry-preserving volumetric export of DICOM and NIfTI studies.
+keywords:
+  - medical imaging
+  - segmentation
+  - annotation
+  - Napari
+  - SAM2
+identifiers:
+  - type: other
+    value: "arXiv:2602.22649"
+    description: "Related preprint"

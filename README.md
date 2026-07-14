@@ -1,389 +1,218 @@
-# Interactive Medical SAM2 GUI
+# Interactive Medical-SAM2 GUI
 
-Napari-based GUI that wraps **Medical-SAM2** for **clinical-style, cohort-scale** annotation workflows: load **DICOM** or **NIfTI**, prompt mainly with **boxes** (and optionally points), **propagate** masks across slices, perform **final manual correction**, resume work from existing label maps, render **multi-object 3D volumes**, measure **per-object volumes**, and save masks **aligned to the source geometry** (spacing/origin/direction).
+[![Tests](https://github.com/SKKU-IBE/Medical-SAM2GUI/actions/workflows/tests.yml/badge.svg)](https://github.com/SKKU-IBE/Medical-SAM2GUI/actions/workflows/tests.yml)
+[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](CHANGELOG.md)
 
-This tool is intended for **research annotation workflows** and does not provide clinical decision support.
+Interactive Medical-SAM2 GUI is a local-first Napari application for semi-automatic annotation of 3D medical images. It discovers DICOM series and NIfTI volumes in one cohort folder, supports box and point prompts with Medical-SAM2 propagation, allows final manual correction, reloads existing label maps, reports source-grid volumes, and exports geometry-preserving masks.
 
----
+The software is intended for research annotation workflows. It is not a medical device and does not provide clinical decision support.
 
-## Typical workflow (recommended)
+![Manual mode with a reloaded multi-label mask and live source-grid volumes](./images/manual-mask-resume.png)
 
+The demonstration uses the public TCIA `UCSD-PTGBM-0001_01` case. Asset provenance and attribution are recorded in [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
 
-![alt video](./videos/1.gif)
-Single object - initial box prompt propagation, point prompt-based refinement, manaul brush correction, 3D volume rendering, save mask
+## Workflow
 
-1) Select a **root folder** containing patient DICOM series folders and/or NIfTI files. Generated mask folders and NIfTI label maps are excluded from the patient queue.
-2) Patients are discovered and processed **sequentially**. For each patient you can proceed or **skip**.  
-3) Use **box prompts** (primary) and optional **point prompts** (refinement) to define objects.  
-4) Run **propagation** (Medical-SAM2) to obtain masks across the target slice range.  
-5) Inspect results. If needed, adjust prompts and propagate again.  
-6) When the result is satisfactory, perform **final manual correction** (brush/erase/fill). Existing masks can be loaded first when continuing earlier work.
-7) Confirm the live per-object volume overlay and **save** source-grid masks; use **3D volume rendering** when shape inspection is needed.
+![Manual mask resume workflow](./images/manual-mask-resume.gif)
 
-> Boxes generally provide higher fidelity than points. Draw boxes **tightly** around the object.
-
-Raw MRI can optionally undergo **N4 bias field correction** and **intensity normalization** before prompting.
-
----
+1. Select a root folder containing DICOM series, NIfTI volumes, or both.
+2. Choose Manual or Automatic mode and optional preprocessing.
+3. Open a study from the automatically generated patient list.
+4. Add box prompts and optional positive or negative point prompts.
+5. Propagate the mask over the selected slice range.
+6. Correct the result with paint, erase, or fill tools.
+7. Optionally load a saved or external label map and continue editing.
+8. Review live per-object and total volumes, then save source-grid outputs.
 
 ## Features
 
-- **Automatic mixed-format discovery:** recursively build a unified patient/study queue from DICOM series and NIfTI volumes under one root folder, without requiring format-specific selection; generated mask locations and detected NIfTI label maps are excluded.
-- **Cohort navigation:** point the GUI to a root folder; cases are handled sequentially with the ability to proceed/skip per patient.
-- **Box/point prompting + propagation** with undo/redo history.
-- **Single-object first/last propagation:** for a single object, tight boxes on the **first and last** slices are typically sufficient to segment intermediate slices.
-- **Multi-object annotation:** annotate multiple objects in one volume with explicit per-object prompts.
-- **Resumable annotation:** load combined or object-wise masks produced by this GUI or another tool, preserve label IDs, and continue editing.
-- **Manual edit mode:** label painting/erasing/filling and box editing inside Napari; changed slices are synchronized to the source grid through the end of each stroke.
-- **Quantification & visualization:** live per-object/total volume overlay plus optional multi-object 3D volume rendering.
-- **Robust DICOM/NIfTI handling:** recover invalid DICOM slice spacing and preserve source spacing/origin/direction during import and export.
-- **Windows Unicode paths:** NiBabel fallback supports reading and writing NIfTI masks in paths containing Korean or other non-ASCII characters.
-- **Linux/Windows support** with CUDA-enabled or CPU-only PyTorch builds.
-- Optional MRI preprocessing: **N4 bias field correction** and intensity normalization.
+- **Automatic mixed-format discovery:** recursively builds one study queue from DICOM series and NIfTI volumes without a format-specific loading step.
+- **Label-map exclusion:** skips `preprocessed` and `*_masks` directories and inspects NIfTI metadata and values to keep detected label maps out of the patient list.
+- **Cohort navigation:** processes studies sequentially with previous, next, skip, and direct patient selection controls.
+- **Promptable 3D segmentation:** uses box prompts as the primary input, point prompts for refinement, and Medical-SAM2 propagation across slices.
+- **Multi-object annotation:** preserves explicit non-negative integer Object IDs in a combined label map.
+- **Resumable editing:** imports combined or object-wise NIfTI, NRRD, MHA, and MHD label maps produced by this GUI or another tool.
+- **Geometry-aware mask import:** compares shape, spacing, origin, and direction; mismatches require confirmation before nearest-neighbor resampling.
+- **Source-grid canonical masks:** keeps the original image grid as the authoritative mask and synchronizes only edited display slices.
+- **Live volumetry:** shows every Object ID and Total in `mm^3` and mL using source-grid voxel counts and spacing.
+- **DICOM spacing recovery:** recovers invalid zero slice spacing from physical slice positions, valid spacing tags, slice thickness, or a terminal folder value such as `3mm`.
+- **Windows Unicode paths:** falls back to NiBabel for NIfTI reads and writes when SimpleITK cannot handle non-ASCII paths.
+- **Optional 3D inspection:** retains PyVista volume rendering as a separate visualization tool.
 
----
+## Requirements
 
-## Installation (uv)
+- Python 3.10, 3.11, or 3.12
+- Windows or Linux
+- A CUDA-capable GPU is recommended for propagation; CPU execution is substantially slower
+- The Medical-SAM2 checkpoint, downloaded separately from the upstream project
 
-1) Install `uv`:
+## Installation
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-2) Sync dependencies from `pyproject.toml`:
-
-```bash
-uv sync
-```
-
-3) (Optional, NVIDIA CUDA) replace torch wheels with a CUDA build:
+The reproducible development and user environment is managed with [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# CUDA 12.1 example
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+git clone https://github.com/SKKU-IBE/Medical-SAM2GUI.git
+cd Medical-SAM2GUI
+uv sync --frozen
 ```
 
-4) Download model weights:
+The checkpoint is not distributed in this repository or its release artifacts. Review the upstream source and terms, then run the checksum-verifying downloader:
 
-- Grab `Medical_SAM2_pretrain.pth` from Hugging Face:
-  https://huggingface.co/jiayuanz3/MedSAM2_pretrain/tree/main
+```bash
+uv run medical-sam2-download-checkpoint
+```
 
-Place it in the project root or update your path in `cfg.py`.
+The downloader retrieves the official `MedSAM2_pretrain.pth` artifact from [jiayuanz3/MedSAM2_pretrain](https://huggingface.co/jiayuanz3/MedSAM2_pretrain), verifies SHA-256 `059572b072eff2e41975bf85b0dcca96bc58889db60a89e9f5b1f075236735d7`, and atomically installs it in the platform user cache.
 
-Windows users can run the same `uv` commands in PowerShell. Linux users should ensure the installed NVIDIA driver supports the selected CUDA runtime (`nvidia-smi`).
+## Running
 
----
+```bash
+uv run medical-sam2-gui
+```
 
-## Quick start
+The legacy command remains supported:
 
 ```bash
 uv run python medsam_gui.py
 ```
 
-During setup, pick mode and data path. **Manual mode** uses user-supplied prompts (boxes/points) and propagation.  
-If an **auto mode** is present in your build, it is intended to accept automatically generated prompts from upstream detection/segmentation models (see Roadmap).
+Checkpoint lookup follows this order:
 
----
+1. `--checkpoint PATH`
+2. `MEDICAL_SAM2_CHECKPOINT`
+3. `Medical_SAM2_pretrain.pth` in the current working directory
+4. The platform user cache populated by `medical-sam2-download-checkpoint`
 
-## Usage
+For example:
 
-Navigation dialogs guide you through dataset selection and per-patient options.
-
-### Automatic study discovery
-
-Select a single root directory containing DICOM series, NIfTI images, or both. The application recursively discovers directories containing DICOM (`.dcm`) slices and NIfTI volumes (`.nii` and `.nii.gz`), then combines them into one sequential patient/study queue. Users do not need to separate the two source formats or select a format-specific loading mode.
-
-To prevent saved annotations from being presented as new source studies, discovery automatically:
-
-- skips `preprocessed` directories and directories ending in `*_masks`;
-- inspects candidate 3D NIfTI files and excludes files identified as label maps from their header intent or a small set of non-negative, integer-like label values;
-- keeps ambiguous or unreadable NIfTI files in the queue with a console warning, avoiding accidental omission of a source image.
-
-![alt text](./images/image-0.png)
-
-- Main dialog:
-  - choose `manual` (user-supplied prompts).
-  - `auto` is reserved for workflows where initial prompts are produced by an upstream detection/segmentation model.
-  - Enable “Perform preprocessing” for raw MRI (N4 + intensity normalization).
-  - Set `Data path` to a folder containing NIfTI files or DICOM series.
-
-![alt text](./images/image-1.png)
-
-- Patient queue:
-  - patients in the data path are processed in order.
-  - for each patient you can toggle preprocessing and mode.
-  - `Double viewer` lets you view paired series (e.g., T1/T2) together.
-
-![alt text](./images/image-2.png)
-
-- Workspace:
-  - left panel lists layers (image, prompt/mask layers, user points/boxes).
-  - right panel holds prompt, propagation, editing, mask import, and export controls.
-  - layer selection matters: add boxes from the `mask, box layer`; add points from the `image, point layer`; edit boxes/points only from their respective `User Boxes correction layer` and `User Points correction layer`.
-
----
-
-## Prompting & propagation (important guidelines)
-
-### Box creation (how to draw a box)
-
-![alt text](./images/image-4.png)
-
-To create a box prompt:
-1) click the **top-left** corner  
-2) then click the **bottom-right** corner  
-Use the `mask, box layer` when adding boxes; edits belong in the `User Boxes correction layer`.
-
-For best results, draw the box **as tightly as possible** around the object (minimize empty background).
-
-### Single-object workflow (fast path)
-
-![alt video](./videos/2.gif)
-
-For a single target object in a 3D volume:
-
-1) find the **first slice** where the object appears → draw a tight **box**  
-2) find the **last slice** where the object appears → draw a tight **box**  
-3) run **Propagate** to automatically segment intermediate slices  
-
-This is the recommended high-throughput workflow for one structure that varies smoothly across slices.
-
-### Multi-object workflow (explicit control)
-
-For multiple objects:
-
-- provide prompts **per slice** and **per object** on the slices where each object needs to be tracked.
-- recommended rule for stable behavior:
-  - **one box per object per slice** (avoid multiple boxes for the same object on the same slice)
-- multiple point prompts (positive/negative) are allowed for refinement.
-
-### Point prompts (secondary / refinement)
-
-![alt video](./videos/3.gif)
-
-![alt text](./images/image-5.png)
-
-Point prompts are used to refine a prediction on a slice (small additions/corrections):
-
-- place **positive / negative** clicks on the visible slice.
-- in the current workflow, point prompts are intended to be used **together with** a box prompt for that object on the same slice (box defines the object region; points provide additional guidance).
-- use the `image, point layer` when adding points; edits belong in the `User Points correction layer`.
-
-![alt video](./videos/5.gif)
-
-### Controls (GUI)
-
-- `Add Box`: click top-left then bottom-right to place a box prompt (works on box/mask layers).
-- `Add + / - Point`: place positive/negative clicks on the visible slice.
-- `Propagate`: run Medical-SAM2 propagation using the prompted slice range.
-- Layer rule of thumb: add boxes on `mask, box layer`; add points on `image, point layer`; edit boxes/points only in their correction layers; manual painting/erasing happens on `mask, image layer` with `Manual Edit` enabled.
-
-### Keyboard shortcuts (manual workflow)
-
-- `Left` / `Right`: move slice from the **currently visible slice** (does not jump back to first slice).
-- Initial view opens at the **center slice** of the volume.
-- `P`: manual **Pen** (paint) mode ON immediately.
-- `E`: manual **Erase** mode ON immediately.
-- `F`: manual **Fill** mode ON immediately.
-  - Pressing `P`/`E`/`F` repeatedly is safe (mode remains active; no freeze/toggle-off behavior).
-  - When `P`/`E`/`F` is active, prompt layers are hidden to focus on manual editing.
-- `Q`: toggle manual edit ON/OFF.
-- `H` / `J`: add positive / negative point prompt.
-- `R`: add box prompt.
-- `K` / `T`: edit points / edit boxes.
-- `C`: clear prompts/masks.
-- `Y`: toggle mask opacity (on/off); `U` / `I`: decrease/increase opacity; `O`: set opacity to 1.0.
-- `Ctrl+Z` / `Ctrl+Y`: prompt undo/redo.
-- `Alt+Z` / `Alt+Y`: mask undo/redo.
-- `Ctrl+S`: save masks.
-
----
-
-## Editing and QA (final correction)
-
-![alt video](./videos/4.gif)
-
-![alt video](./videos/6.gif)
-
-- Manual edit mode: brush/erase labels, adjust brush size, change object ID colors, and tweak mask opacity.
-- `Edit Points`: toggle editability of user point layer to move/delete points.
-- `Edit Boxes`: toggle editability of user box layer; rectangles keep shape during edits.
-- `Manual Edit`: enable/disable napari painting/rectangle drawing.
-- Fast manual editing: use `P`/`E`/`F` to jump directly into pen/erase/fill without pre-enabling manual mode.
-- `Clear All`: remove prompts/masks and reset history.
-- `Hide/Show Object IDs`: toggle object ID overlays.
-- `Undo`/`Redo`: prompt history management.
-
-After `Propagate` and confirmation, keyboard focus returns to the viewer so slice movement/inspection can continue immediately.
-
-**Recommended practice:** use prompts + propagation to obtain the best segmentation, then perform **final manual correction** and save. This keeps the workflow consistent and reproducible.
-
----
-
-## Resuming or importing masks (Manual mode)
-
-Use `Load Masks` to continue a previous annotation or import an external 3D label map.
-
-- Supported formats: `.nii`, `.nii.gz`, `.nrrd`, `.mha`, and `.mhd`.
-- Multiple files can be selected. Multi-label files preserve their positive integer label IDs.
-- Binary files use `_objectID_N` or `_label_N` from the filename when present; otherwise they use the current Object ID.
-- If a mask geometry differs from the source, the GUI shows both geometries and requests confirmation before nearest-neighbor resampling.
-- `Replace` substitutes the current mask. `Merge` fills only background voxels and reports conflicting voxels while preserving existing labels.
-- Overlapping, different labels among simultaneously imported files cancel the import rather than silently overwriting data.
-- The file dialog starts in the current study's `<study>_masks` directory when it exists, or beside the current source image otherwise.
-
-Imported masks remain on the original source grid. Only edited slices are synchronized from the display-resolution representation, so untouched imported slices retain their original label data.
-
----
-
-## Under the hood (prompt pipeline)
-
-- Prompts are stored as `pos_points`, `neg_points`, and `box_prompts`; `Undo/Redo` replays this history.
-- Boxes sync from the “User Boxes correction layer” and are auto-rectified to valid rectangles; edits keep shapes stable.
-- Points sync from the “User Points correction layer” and preserve original object IDs when edited.
-- Propagation builds a sub-volume between the min/max prompted slices, pushes boxes then points into Medical-SAM2 (`train_add_new_bbox` → `train_add_new_points`), and collects logits via `propagate_in_video` to form per-slice label masks.
-
----
-
-## 3D visualization and volumetry
-
-![alt text](./images/image-3.png)
-
-- The top-right overlay reports every Object ID in `mm³` and `mL`, plus the total, without requiring 3D rendering.
-- Brush updates are debounced for responsiveness and finalized at stroke release and before saving.
-- Volumes are computed on the source grid:
-  - `volume_mm3 = voxel_count × spacing_x × spacing_y × spacing_z`
-- `3D Volume Render`: optional PyVista view to inspect object location and morphology.
-
-This supports tasks such as tumor burden monitoring and rapid sanity-checking of final labels.
-
----
-
-## Saving outputs
-
-- `Save Masks` opens at the current DICOM study folder or the parent of the current NIfTI source. The location can still be changed before saving.
-- Selecting a parent folder creates `<study>_masks` containing:
-  - `<study>_full_mask.nii.gz`: combined multi-label mask on the original source grid.
-  - `<study>_mask_objectID_N.nii.gz`: one binary mask per Object ID in Manual mode.
-  - `volumes.txt`: tab-separated `object_id`, `voxel_count`, and `volume_mm3` values.
-- Existing files for the same study and Object ID are updated. Generated object-mask files for Object IDs no longer present are removed.
-- A pending brush/erase/fill stroke is synchronized before the NIfTI files and volume report are calculated.
-- Output masks preserve source shape, spacing, origin, and direction. On Windows non-ASCII paths, NiBabel provides a Unicode-safe NIfTI writer.
-
----
-
-## Layers (left panel)
-
-- `image, point layer`: base image per slice.
-- `mask, box layer`: labels/masks and box drawing surface.
-- `User Points correction layer`: editable user points (positive/negative) for prompts.
-- `User Boxes correction layer`: editable rectangles for box prompts.
-- `Object IDs`: optional overlay for object ID display.
-
----
-
-## Data and intensity handling
-
-- Accepts DICOM folders or NIfTI files as source studies. Geometry (spacing/origin/direction) is preserved on save.
-- `preprocessed` and `*_masks` directories are excluded from patient discovery. Other NIfTI files with label-map characteristics are also omitted from the patient queue.
-- DICOM loading uses SimpleITK first. If invalid slice spacing prevents loading, the fallback reads slices with pydicom and determines z-spacing in this order:
-  1. median physical distance from `ImagePositionPatient` and `ImageOrientationPatient`;
-  2. median positive `SpacingBetweenSlices` value found across the series;
-  3. median positive `SliceThickness` value;
-  4. a trailing folder-name value such as `3mm`, `5mm`, or `3.3mm`.
-- Zero-valued `SpacingBetweenSlices` is ignored. If no valid spacing can be recovered, loading stops with a clear error instead of assuming `1 mm`.
-- Per-slice preprocessing for display/model input:
-  - percentile clip (0.5/99.5), normalize per slice, scale to 0–255 `uint8`.
-  - tensors are cast to `float32` but retain the 0–255 range before entering the model.
-
----
-
-## Outputs
-
-- Combined and object-wise masks are saved on the original image grid with source geometry.
-- The live volume overlay, `volumes.txt`, and saved NIfTI masks are all calculated from the same synchronized source-grid label map.
-- The original DICOM/NIfTI source and imported mask files are never modified.
-
----
-
-## Tests / Sanity checks
-
-- Automated regression suite:
 ```bash
-uv run --with pytest pytest -q
+uv run medical-sam2-gui --checkpoint /path/to/custom_checkpoint.pth
 ```
 
-  The suite covers DICOM spacing recovery, study discovery, mask import/resampling, source-grid volumetry, Unicode NIfTI I/O, saving, and final manual-stroke synchronization.
+## Study Discovery
 
-- Import check (headless):
-```bash
-uv run python - <<'PY'
-import dataloader, gui.navigation, gui.segmentation
-print("Imports OK")
-PY
+Select one root directory. The application recursively finds:
+
+- directories containing `.dcm` slices, treated as DICOM series;
+- `.nii` and `.nii.gz` image volumes;
+- both formats together in the same directory tree.
+
+NIfTI files are conservatively classified as label maps when their header intent is `label`, or when a finite, non-negative 3D volume contains integer-valued data with at most 64 unique labels. Detected label maps are excluded from the patient queue. If inspection fails, the file is retained and a warning is printed rather than silently dropping a possible image.
+
+Generated `*_masks` folders and `preprocessed` folders are never searched as patients. This keeps prior results beside their source study without presenting them as new image volumes.
+
+## Manual Annotation
+
+### Prompting
+
+- `Add Box`: drag from one box corner to the opposite corner on the target slice.
+- `Add + Point`: mark foreground that should be included.
+- `Add - Point`: mark background that should be excluded.
+- `Propagate`: run Medical-SAM2 between prompted slices.
+- `Edit Points` / `Edit Boxes`: adjust existing prompts.
+- `Manual Edit`: enable Napari paint, erase, and fill tools for final correction.
+
+For a single object, place boxes near the first and last slices containing the target, then propagate. For multiple objects, select the Object ID before adding each prompt. Propagation replaces only the prompted Object ID in generated frames; other labels and slices outside the range are preserved.
+
+### Resume Or Import
+
+Select `Load Masks` in Manual mode. The dialog starts in the current study's `<study>_masks` directory when it exists, otherwise beside the source image.
+
+Supported label-map formats are `.nii`, `.nii.gz`, `.nrrd`, `.mha`, and `.mhd`.
+
+- Multi-label masks preserve their label IDs.
+- Binary masks use `_objectID_N` or `_label_N` from the filename when available, otherwise the current Object ID.
+- `Replace` substitutes the current mask.
+- `Merge` fills only background voxels and reports conflicts while keeping existing labels.
+- Overlapping labels from separate import files are rejected rather than silently reassigned.
+- Geometry mismatches are shown before nearest-neighbor resampling; physically non-overlapping or empty results are rejected.
+
+Mask import is undoable. Untouched source slices remain unchanged when subsequent display-resolution edits are synchronized.
+
+### Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `A` / `S` | Positive / negative point |
+| `D` | Add box |
+| `F` | Manual edit |
+| `P` | Propagate |
+| `C` | Clear prompts and masks |
+| `Y` | Toggle mask opacity |
+| `U` / `I` / `O` | Decrease / increase / reset opacity |
+| `[` / `]` | Decrease / increase brush size |
+| `-` / `=` | Decrease / increase Object ID |
+| `Alt+Z` / `Alt+Y` | Mask undo / redo |
+| `Ctrl+S` | Save masks |
+
+## Volumes And Outputs
+
+The editable 1024 x 1024 layer is a display representation. Volume and saved masks use the canonical source-grid label map:
+
+```text
+volume_mm3 = voxel_count * spacing_x * spacing_y * spacing_z
+volume_mL  = volume_mm3 / 1000
 ```
 
-- GPU/driver check:
-  - Linux: `nvidia-smi`
-  - Windows: `nvidia-smi` in PowerShell
-  - then verify CUDA with:
-```bash
-uv run python - <<'PY'
-import torch
-print("CUDA available:", torch.cuda.is_available())
-print("CUDA device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
-PY
+The overlay is debounced during brush movement and finalized at stroke release. Saving flushes every pending paint, erase, or fill change before volume calculation and export, so the overlay, NIfTI files, and `volumes.txt` use the same synchronized data.
+
+After the user confirms a parent folder, the application creates `<study>_masks` containing:
+
+```text
+<study>_masks/
+  <study>_full_mask.nii.gz
+  <study>_mask_objectID_1.nii.gz
+  <study>_mask_objectID_2.nii.gz
+  volumes.txt
 ```
 
-- GUI smoke test:
-  - `uv run python medsam_gui.py`
-  - load a sample DICOM/NIfTI folder and confirm that images, prompt layers, propagation, and saving run without errors.
+- `<study>_full_mask.nii.gz` is the combined multi-label source-grid mask.
+- Object files are binary masks for each current Object ID.
+- `volumes.txt` contains `object_id`, `voxel_count`, and `volume_mm3`.
+- Shape, spacing, origin, direction, and integer labels are preserved.
+- Stale generated object files for the same study are removed when an Object ID no longer exists.
+- Original images and imported masks are never modified.
 
----
+## DICOM Spacing Recovery
 
-## Contributing and support
+SimpleITK is attempted first. If malformed metadata such as `SpacingBetweenSlices = 0` prevents loading, the fallback reads slices with pydicom, sorts them, and determines z spacing in this order:
 
-- Report reproducible bugs, request features, or ask usage questions through [GitHub Issues](https://github.com/SKKU-IBE/Medical-SAM2GUI/issues).
-- Contributions are welcome through pull requests. Create a focused branch, describe the user-visible behavior and validation steps, and run `uv run --with pytest pytest -q` before submission.
-- Do not attach identifiable or protected medical images to public issues. Use synthetic or de-identified examples that can be shared legally.
-- Security-sensitive reports should be sent privately to the repository maintainers rather than posted with patient or institutional details.
+1. median projected distance from `ImagePositionPatient` and `ImageOrientationPatient`;
+2. median positive `SpacingBetweenSlices` found in any slice;
+3. median positive `SliceThickness`;
+4. a terminal folder token such as `3mm`, `5mm`, or `3.3mm`.
 
----
+Zero values are ignored. Folder-derived spacing is reported as a warning. If no defensible value is available, loading stops with a clear error instead of assigning an arbitrary 1 mm spacing.
 
-## Roadmap (planned extension)
+## Development
 
-Planned extension: integrate an upstream **automatic detection and/or segmentation model** to **auto-generate initial prompts**, then keep the same in-GUI workflow:
+Run the complete test suite and build artifacts from a locked environment:
 
-**auto prompts → review → adjust prompts → propagate → final correction → save**.
+```bash
+uv sync --frozen
+uv run pytest -q
+uv build
+```
 
----
+The regression suite covers study discovery, DICOM spacing recovery, checkpoint download failure recovery, Unicode NIfTI paths, mask import/resampling, source-grid volume, save/resume behavior, and final manual-stroke synchronization. CI runs on Ubuntu with Python 3.10 and Windows with Python 3.12.
 
-## How to cite
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull-request guidance, [CHANGELOG.md](CHANGELOG.md) for release notes, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled upstream notices.
 
-Until a JOSS DOI is issued, please cite the repository:
-https://github.com/SKKU-IBE/Medical-SAM2GUI
+## Citation
+
+Release metadata are provided in [CITATION.cff](CITATION.cff). The related preprint is [arXiv:2602.22649](https://arxiv.org/abs/2602.22649).
 
 ```bibtex
 @software{medicalsam2gui2026,
-  title = {Interactive Medical-SAM2 GUI: A Napari-based semi-automatic annotation tool for medical images},
-  author = {Hong, Woojae and Hwang, Jong Ha and Chung, Jiyong and Choi, Joongyeon and Kim, Hyunggun and Kim, Yong Hwy},
-  year = {2026},
-  version = {0.1.0},
-  url = {https://github.com/SKKU-IBE/Medical-SAM2GUI}
+  title   = {Interactive Medical-SAM2 GUI: A Napari-based semi-automatic annotation tool for medical images},
+  author  = {Hong, Woojae and Hwang, Jong Ha and Chung, Jiyong and Choi, Joongyeon and Kim, Hyunggun and Kim, Yong Hwy},
+  version = {1.1.0},
+  year    = {2026},
+  url     = {https://github.com/SKKU-IBE/Medical-SAM2GUI}
 }
 ```
 
-The Medical-SAM2 model and weights are from:
-- https://github.com/ImprintLab/Medical-SAM2
-- https://huggingface.co/jiayuanz3/MedSAM2_pretrain
-
-Please cite their work per their license.
-
----
-
 ## License
 
-GPL-3.0-only (see `LICENSE`).
-
-Model weights: download from the Hugging Face link above (or the upstream repository) and follow their respective licenses.
+Project code is distributed under `GPL-3.0-only`; see [LICENSE](LICENSE). Bundled Medical-SAM2/SAM2-derived code retains its Apache-2.0 notice, and the connected-components implementation retains its BSD-3-Clause notice. The checkpoint and source medical volumes are not redistributed. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).

@@ -30,11 +30,9 @@ bibliography: paper.bib
 
 # Summary
 
-![Figure 1. Interactive Medical-SAM2 GUI main view in Napari with image, prompt layers, and mask overlays.](./images/image-2.png)
+![Interactive Medical-SAM2 GUI during resumed manual annotation, showing a public FLAIR volume, imported multi-label mask, current workflow controls, and source-grid volumetry. The displayed case is from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data [@gagnon2026ucsdptgbm]. \label{fig:manual-workflow}](./images/manual-mask-resume.png)
 
-Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 3D medical image volumes (Figure 1). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder (Figure 2a) and annotate cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files (Figure 2b). Existing multi-label masks can be reloaded for continued annotation, and manual corrections are synchronized to the original image grid before export. During editing and saving, the tool reports per-object volumetry and provides optional 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden) (Figure 2c).
-
-![Figure 2. (a) Root-folder selection for DICOM/NIfTI discovery; (b) patient-by-patient navigation with proceed/skip; (c) 3D volume rendering and per-object volumetry computed from source-grid voxel counts and voxel volume.](./images/Figure-2.png)
+Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 3D medical image volumes (\autoref{fig:manual-workflow}). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder and annotate automatically discovered cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files. Existing multi-label masks can be reloaded for continued annotation, and manual corrections are synchronized to the original image grid before export. During editing and saving, the tool reports per-object volumetry and provides optional 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden).
 
 # Statement of need
 
@@ -76,9 +74,11 @@ The software is intended for research annotation workflows and does not provide 
 
 The project brings together engineering and neurosurgical collaborators at Sungkyunkwan University and Seoul National University Hospital. Its immediate research role is the creation and revision of source-aligned 3D labels for longitudinal medical imaging studies, where segmentation continuity and volume changes must be reviewed across examinations. The combined multi-label mask, object-wise masks, and volume report can be used for dataset curation, inter-reader quality assurance, model training and validation, and longitudinal burden analyses. The local-first workflow also allows protected imaging data to remain within institutional computing environments while retaining reproducible geometry and object identifiers.
 
+The tool's development was presented at the 20th Korean Brain Tumor Society Winter Meeting [@hong2026kbts], and an early usability evaluation was presented at the 44th Annual Spring Meeting of the Korean Neurosurgical Society [@hong2026kns]. These conference presentations are cited as separate research outputs; no participant-level or quantitative usability results are reported in this software paper.
+
 # AI usage disclosure
 
-OpenAI Codex (GPT-5) was used to assist with portions of software implementation, debugging, automated test generation, and revision of documentation and paper text. All suggested changes were reviewed by the authors, and software behavior was checked with automated tests and manual GUI validation. Generative AI was not used to generate or analyze study data or scientific results.
+OpenAI Codex (GPT-5; the exact model snapshot was not exposed) and GitHub Copilot (the underlying model and version were not exposed) were used to assist with portions of software implementation, debugging, automated test generation, and revision of documentation and paper text. All generated suggestions were reviewed, modified where necessary, and validated by the authors through code review, automated tests, and manual GUI evaluation. The authors retained responsibility for the scientific, architectural, and interface-design decisions. Generative AI was not used to generate or analyze study data or scientific results.
 
 # Conflict of interest
 
@@ -86,6 +86,6 @@ The authors declare no competing interests.
 
 # Acknowledgements
 
-This development was supported by the National Research Foundation of Korea (NRF) grant funded by the Korea government (MEST) (No.RS-2025-00517614). We thank the developers of Napari [@sofroniew2022napari], SimpleITK [@lowekamp2013simpleitk], pydicom [@mason2011pydicom], NiBabel [@brett2024nibabel], PyVista [@sullivan2019pyvista], SAM [@kirillov2023sam], SAM2 [@ravi2024sam2], and Medical-SAM2 [@zhu2024medical] for releasing open-source software and models.
+This development was supported by the National Research Foundation of Korea (NRF) through the Ministry of Science and ICT (MSIT) (No. RS-2025-00517614). The funder had no role in software design, implementation, validation, manuscript preparation, or the decision to submit the work. We thank the developers of Napari [@sofroniew2022napari], SimpleITK [@lowekamp2013simpleitk], pydicom [@mason2011pydicom], NiBabel [@brett2024nibabel], PyVista [@sullivan2019pyvista], SAM [@kirillov2023sam], SAM2 [@ravi2024sam2], and Medical-SAM2 [@zhu2024medical] for releasing open-source software and models.
 
 # References
