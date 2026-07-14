@@ -30,7 +30,7 @@ bibliography: paper.bib
 
 # Summary
 
-![Interactive Medical-SAM2 GUI during resumed manual annotation, showing a public FLAIR volume, imported multi-label mask, current workflow controls, and source-grid volumetry. The displayed case is from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data [@gagnon2026ucsdptgbm].[]{label="fig:manual-workflow"}](./images/manual-mask-resume.png)
+![Interactive Medical-SAM2 GUI during resumed manual annotation, showing a public FLAIR volume, imported multi-label mask, current workflow controls, and source-grid volumetry. The displayed case is from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data [@gagnon2026ucsdptgbm]. \label{fig:manual-workflow}](./images/manual-mask-resume.png)
 
 Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 3D medical image volumes (\autoref{fig:manual-workflow}). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder and annotate automatically discovered cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files. Existing multi-label masks can be reloaded for continued annotation, and manual corrections are synchronized to the original image grid before export. During editing and saving, the tool reports per-object volumetry and provides optional 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden).
 
