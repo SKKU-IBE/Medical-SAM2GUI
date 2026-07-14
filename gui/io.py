@@ -1,6 +1,6 @@
-"""I/O helpers for saving masks."""
+"""I/O helpers for importing and saving masks."""
+import os
 import numpy as np
-import torch
 import traceback
 import time
 import re
@@ -12,6 +12,12 @@ from qtpy.QtWidgets import QFileDialog, QMessageBox
 
 _WINDOWS_FORBIDDEN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _DISPLAY_PATIENT_PREFIX = re.compile(r'^\s*patient\s+\d+\s*:\s*', re.IGNORECASE)
+_BINARY_OBJECT_ID = re.compile(r'(?i)_(?:mask_)?(?:objectid|label)_(\d+)(?:\D|$)')
+_SUPPORTED_MASK_FILTER = (
+    "Medical label images (*.nii *.nii.gz *.nrrd *.mha *.mhd);;"
+    "NIfTI (*.nii *.nii.gz);;NRRD (*.nrrd);;MetaImage (*.mha *.mhd)"
+)
+_NEAREST = Image.Resampling.NEAREST if hasattr(Image, "Resampling") else Image.NEAREST
 
 
 def _compute_voxel_volume(spacing):
@@ -23,6 +29,614 @@ def _compute_voxel_volume(spacing):
         return vol if vol > 0 else 1.0
     except Exception:
         return 1.0
+
+
+def _numpy_vector(value, default, length):
+    if value is None:
+        value = default
+    if hasattr(value, 'cpu'):
+        value = value.cpu().numpy()
+    elif hasattr(value, 'numpy'):
+        value = value.numpy()
+    try:
+        result = np.asarray(value, dtype=float).reshape(-1)
+    except Exception:
+        result = np.asarray(default, dtype=float).reshape(-1)
+    if result.size < length:
+        fallback = np.asarray(default, dtype=float).reshape(-1)
+        result = np.concatenate((result, fallback[result.size:length]))
+    return result[:length]
+
+
+def get_source_mask_shape(meta, display_shape):
+    """Return the original image array shape in z, y, x order."""
+    fallback = tuple(int(v) for v in display_shape)
+    shape = meta.get('shape', fallback) if isinstance(meta, dict) else fallback
+    if hasattr(shape, 'cpu'):
+        shape = shape.cpu().numpy()
+    elif hasattr(shape, 'numpy'):
+        shape = shape.numpy()
+    try:
+        shape = tuple(int(v) for v in np.asarray(shape).reshape(-1)[:3])
+    except Exception:
+        shape = fallback
+    if len(shape) != 3 or any(v <= 0 for v in shape):
+        return fallback
+    return shape
+
+
+def get_mask_geometry(meta, display_shape):
+    shape = get_source_mask_shape(meta, display_shape)
+    spacing = _numpy_vector(
+        meta.get('spacing') if isinstance(meta, dict) else None,
+        (1.0, 1.0, 1.0),
+        3,
+    )
+    origin = _numpy_vector(
+        meta.get('origin') if isinstance(meta, dict) else None,
+        (0.0, 0.0, 0.0),
+        3,
+    )
+    direction_value = meta.get('direction') if isinstance(meta, dict) else None
+    if hasattr(direction_value, 'cpu'):
+        direction_value = direction_value.cpu().numpy()
+    elif hasattr(direction_value, 'numpy'):
+        direction_value = direction_value.numpy()
+    try:
+        direction = np.asarray(direction_value, dtype=float).reshape(-1)
+    except Exception:
+        direction = np.asarray([], dtype=float)
+    if direction.size != 9:
+        direction = np.eye(3).reshape(-1)
+    if not np.all(np.isfinite(spacing)) or np.any(spacing <= 0):
+        raise ValueError(f"Invalid source spacing: {tuple(spacing)}")
+    if not np.all(np.isfinite(origin)):
+        raise ValueError(f"Invalid source origin: {tuple(origin)}")
+    if not np.all(np.isfinite(direction)):
+        raise ValueError("Invalid source direction matrix.")
+    return shape, spacing, origin, direction
+
+
+def build_mask_reference_image(meta, display_shape):
+    """Build an empty SimpleITK image matching the source image geometry."""
+    shape, spacing, origin, direction = get_mask_geometry(meta, display_shape)
+    reference = sitk.Image(
+        int(shape[2]), int(shape[1]), int(shape[0]), sitk.sitkInt32
+    )
+    reference.SetSpacing(tuple(float(v) for v in spacing))
+    reference.SetOrigin(tuple(float(v) for v in origin))
+    reference.SetDirection(tuple(float(v) for v in direction))
+    return reference
+
+
+def _resize_label_slice(label_slice, target_y, target_x):
+    source = np.asarray(label_slice, dtype=np.int32)
+    if source.shape == (target_y, target_x):
+        return source.copy()
+    image = Image.fromarray(source, mode='I')
+    return np.asarray(image.resize((target_x, target_y), _NEAREST), dtype=np.int32)
+
+
+def _compact_label_dtype(array):
+    array = np.asarray(array)
+    maximum = int(array.max()) if array.size else 0
+    if maximum <= np.iinfo(np.uint8).max:
+        return array.astype(np.uint8, copy=False)
+    if maximum <= np.iinfo(np.uint16).max:
+        return array.astype(np.uint16, copy=False)
+    return array.astype(np.int32, copy=False)
+
+
+def resize_label_stack(label_stack, target_shape):
+    """Nearest-neighbor resize of a z, y, x label stack."""
+    source = np.asarray(label_stack)
+    target_shape = tuple(int(v) for v in target_shape)
+    if source.ndim != 3 or len(target_shape) != 3:
+        raise ValueError("Label masks must be 3D arrays in z, y, x order.")
+    if source.shape[0] != target_shape[0]:
+        raise ValueError(
+            f"Slice count mismatch: mask has {source.shape[0]}, expected {target_shape[0]}."
+        )
+    if source.shape == target_shape:
+        return _compact_label_dtype(source.copy())
+    resized = np.empty(target_shape, dtype=np.int32)
+    for z_index in range(target_shape[0]):
+        resized[z_index] = _resize_label_slice(
+            source[z_index], target_shape[1], target_shape[2]
+        )
+    return _compact_label_dtype(resized)
+
+
+def source_mask_to_display(source_mask, display_shape):
+    return resize_label_stack(source_mask, display_shape)
+
+
+def display_mask_to_source(display_mask, source_shape):
+    return np.asarray(resize_label_stack(display_mask, source_shape), dtype=np.int32)
+
+
+def sync_source_mask_slices(source_mask, display_mask, slice_indices):
+    """Update selected source-grid slices from the editable display mask."""
+    source = np.asarray(source_mask, dtype=np.int32).copy()
+    display = np.asarray(display_mask)
+    if source.ndim != 3 or display.ndim != 3 or source.shape[0] != display.shape[0]:
+        raise ValueError("Source and display masks must have the same slice count.")
+    for z_index in sorted({int(v) for v in slice_indices}):
+        if 0 <= z_index < source.shape[0]:
+            source[z_index] = _resize_label_slice(
+                display[z_index], source.shape[1], source.shape[2]
+            )
+    return source
+
+
+def compute_label_volume_entries(source_mask, spacing):
+    """Return (label, voxel_count, volume_mm3) entries from a source-grid mask."""
+    labels, counts = np.unique(np.asarray(source_mask), return_counts=True)
+    voxel_volume = _compute_voxel_volume(spacing)
+    return [
+        (int(label), int(count), float(count) * voxel_volume)
+        for label, count in zip(labels, counts)
+        if int(label) > 0
+    ]
+
+
+def _validate_label_array(array, path):
+    data = np.asarray(array)
+    if data.ndim != 3:
+        raise ValueError(f"{path}: expected a 3D label image, got shape {data.shape}.")
+    if not np.all(np.isfinite(data)):
+        raise ValueError(f"{path}: mask contains NaN or infinite values.")
+    rounded = np.rint(data)
+    if not np.allclose(data, rounded, rtol=0.0, atol=1e-6):
+        raise ValueError(
+            f"{path}: mask contains non-integer values and appears to be a probability map."
+        )
+    minimum = float(np.min(rounded)) if rounded.size else 0.0
+    maximum = float(np.max(rounded)) if rounded.size else 0.0
+    if minimum < 0.0:
+        raise ValueError(f"{path}: mask labels must be non-negative integers.")
+    if maximum > float(np.iinfo(np.int32).max):
+        raise ValueError(f"{path}: mask label exceeds the supported int32 range.")
+    return rounded.astype(np.int32)
+
+
+def _geometry_matches(image, reference):
+    return (
+        image.GetDimension() == 3
+        and image.GetSize() == reference.GetSize()
+        and np.allclose(image.GetSpacing(), reference.GetSpacing(), rtol=1e-5, atol=1e-5)
+        and np.allclose(image.GetOrigin(), reference.GetOrigin(), rtol=0.0, atol=1e-3)
+        and np.allclose(image.GetDirection(), reference.GetDirection(), rtol=0.0, atol=1e-5)
+    )
+
+
+def _geometry_description(image):
+    return (
+        f"size={image.GetSize()}, spacing={tuple(round(v, 6) for v in image.GetSpacing())}, "
+        f"origin={tuple(round(v, 3) for v in image.GetOrigin())}, "
+        f"direction={tuple(round(v, 4) for v in image.GetDirection())}"
+    )
+
+
+def _binary_object_id(path, current_obj_id):
+    match = _BINARY_OBJECT_ID.search(Path(path).name)
+    if match:
+        return int(match.group(1))
+    return int(current_obj_id)
+
+
+def _is_nifti_path(path):
+    lower = str(path).lower()
+    return lower.endswith('.nii') or lower.endswith('.nii.gz')
+
+
+def _compact_exception(error, limit=700):
+    message = ' '.join(str(error).split()) or error.__class__.__name__
+    if len(message) > limit:
+        return message[: limit - 3] + '...'
+    return message
+
+
+def _read_nifti_with_nibabel(path):
+    try:
+        import nibabel as nib
+    except ImportError as exc:
+        raise RuntimeError(
+            "nibabel is not installed; install it to read NIfTI files from this path."
+        ) from exc
+
+    nib_image = nib.load(str(path))
+    if len(nib_image.shape) != 3:
+        raise ValueError(
+            f"expected a 3D NIfTI label image, got shape {nib_image.shape}."
+        )
+
+    affine = np.asarray(nib_image.affine, dtype=np.float64)
+    if (
+        affine.shape != (4, 4)
+        or not np.all(np.isfinite(affine))
+        or not np.allclose(affine[3], (0.0, 0.0, 0.0, 1.0), rtol=0.0, atol=1e-6)
+    ):
+        raise ValueError("NIfTI affine is missing or invalid.")
+
+    # NIfTI uses RAS physical coordinates; SimpleITK uses LPS.
+    ras_to_lps = np.diag((-1.0, -1.0, 1.0, 1.0))
+    lps_affine = ras_to_lps @ affine
+    axis_columns = lps_affine[:3, :3]
+    spacing = np.linalg.norm(axis_columns, axis=0)
+    if not np.all(np.isfinite(spacing)) or np.any(spacing <= 0.0):
+        raise ValueError("NIfTI affine contains invalid voxel spacing.")
+
+    direction = axis_columns / spacing[np.newaxis, :]
+    if not np.allclose(
+        direction.T @ direction, np.eye(3), rtol=0.0, atol=1e-4
+    ):
+        raise ValueError("NIfTI affine contains shear, which is not supported.")
+    if not np.isclose(abs(np.linalg.det(direction)), 1.0, rtol=0.0, atol=1e-4):
+        raise ValueError("NIfTI affine contains an invalid direction matrix.")
+
+    data_xyz = _validate_label_array(np.asanyarray(nib_image.dataobj), path)
+    data_zyx = np.transpose(data_xyz, (2, 1, 0))
+    image = sitk.GetImageFromArray(data_zyx)
+    image.SetSpacing(tuple(float(value) for value in spacing))
+    image.SetOrigin(tuple(float(value) for value in lps_affine[:3, 3]))
+    image.SetDirection(tuple(float(value) for value in direction.reshape(-1)))
+    return image
+
+
+def _windows_non_ascii_path(path):
+    if os.name != 'nt':
+        return False
+    try:
+        os.fspath(path).encode('ascii')
+        return False
+    except UnicodeEncodeError:
+        return True
+
+
+def _write_nifti_with_nibabel(image, path):
+    try:
+        import nibabel as nib
+    except ImportError as exc:
+        raise RuntimeError(
+            "nibabel is not installed; install it to write NIfTI files to this path."
+        ) from exc
+
+    if image.GetDimension() != 3 or image.GetNumberOfComponentsPerPixel() != 1:
+        raise ValueError("Only scalar 3D images can be written as NIfTI masks.")
+
+    spacing = np.asarray(image.GetSpacing(), dtype=np.float64)
+    origin = np.asarray(image.GetOrigin(), dtype=np.float64)
+    direction = np.asarray(image.GetDirection(), dtype=np.float64).reshape(3, 3)
+    if (
+        spacing.shape != (3,)
+        or origin.shape != (3,)
+        or not np.all(np.isfinite(spacing))
+        or not np.all(np.isfinite(origin))
+        or not np.all(np.isfinite(direction))
+        or np.any(spacing <= 0.0)
+    ):
+        raise ValueError("SimpleITK image geometry is invalid for NIfTI output.")
+    if not np.allclose(
+        direction.T @ direction, np.eye(3), rtol=0.0, atol=1e-4
+    ):
+        raise ValueError("SimpleITK image direction contains unsupported shear.")
+
+    lps_affine = np.eye(4, dtype=np.float64)
+    lps_affine[:3, :3] = direction * spacing[np.newaxis, :]
+    lps_affine[:3, 3] = origin
+    lps_to_ras = np.diag((-1.0, -1.0, 1.0, 1.0))
+    ras_affine = lps_to_ras @ lps_affine
+
+    data_zyx = sitk.GetArrayFromImage(image)
+    data_xyz = np.transpose(data_zyx, (2, 1, 0))
+    nib_image = nib.Nifti1Image(data_xyz, ras_affine)
+    nib_image.header.set_xyzt_units('mm')
+    nib_image.set_qform(ras_affine, code=1)
+    nib_image.set_sform(ras_affine, code=1)
+    nib.save(nib_image, str(path))
+
+
+def _write_nifti_image(image, path):
+    """Write NIfTI through SimpleITK, with a Unicode-safe nibabel fallback."""
+    path = Path(path)
+    if not _is_nifti_path(path):
+        raise ValueError(f"Unsupported NIfTI output extension: {path.name}")
+
+    sitk_error = None
+    skip_simpleitk = _windows_non_ascii_path(path)
+    if not skip_simpleitk:
+        try:
+            sitk.WriteImage(image, str(path))
+            return 'simpleitk'
+        except Exception as exc:
+            sitk_error = exc
+
+    try:
+        _write_nifti_with_nibabel(image, path)
+        return 'nibabel'
+    except Exception as nibabel_error:
+        if skip_simpleitk:
+            sitk_message = "skipped for a Windows non-ASCII path"
+        else:
+            sitk_message = _compact_exception(sitk_error)
+        raise RuntimeError(
+            f"Could not write {path.name}. SimpleITK: {sitk_message}. "
+            f"nibabel fallback: {_compact_exception(nibabel_error)}"
+        ) from nibabel_error
+
+
+def _read_import_mask(path):
+    try:
+        image = sitk.ReadImage(str(path))
+    except Exception as sitk_error:
+        if not _is_nifti_path(path):
+            raise RuntimeError(
+                f"Could not read {Path(path).name}. "
+                f"SimpleITK: {_compact_exception(sitk_error)}"
+            ) from sitk_error
+        try:
+            image = _read_nifti_with_nibabel(path)
+        except Exception as nibabel_error:
+            raise RuntimeError(
+                f"Could not read {Path(path).name}. "
+                f"SimpleITK: {_compact_exception(sitk_error)} "
+                f"nibabel fallback: {_compact_exception(nibabel_error)}"
+            ) from nibabel_error
+    if image.GetDimension() != 3 or image.GetNumberOfComponentsPerPixel() != 1:
+        raise ValueError(f"{path}: only scalar 3D label images are supported.")
+    _validate_label_array(sitk.GetArrayFromImage(image), path)
+    return image
+
+
+def _navigation_patient_path(gui):
+    navigation = getattr(gui, 'navigation_manager', None)
+    patient_list = getattr(navigation, 'patient_list', None)
+    patient_index = getattr(navigation, 'current_patient_idx', None)
+    if not isinstance(patient_index, int) or not patient_list:
+        return None
+    if patient_index < 0 or patient_index >= len(patient_list):
+        return None
+    patient = patient_list[patient_index]
+    if isinstance(patient, (list, tuple)):
+        return patient[0] if patient else None
+    return patient
+
+
+def _mask_directory_for_source(source_path):
+    if not source_path:
+        return None
+    try:
+        source = Path(str(source_path)).expanduser()
+        if not source.exists():
+            return None
+        source = source.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    if source.is_dir():
+        study_directory = source
+        mask_directory = study_directory / f"{study_directory.name}_masks"
+    elif _is_nifti_path(source):
+        study_directory = source.parent
+        mask_directory = study_directory / f"{_strip_nii_extension(source.name)}_masks"
+    else:
+        study_directory = source.parent
+        mask_directory = study_directory / f"{study_directory.name}_masks"
+
+    if mask_directory.is_dir():
+        return mask_directory
+    return study_directory if study_directory.is_dir() else None
+
+
+def get_mask_load_initial_directory(gui):
+    """Resolve the most relevant existing directory for the mask picker."""
+    meta = getattr(gui, 'meta', {}) or {}
+    for source_path in (meta.get('source_path'), _navigation_patient_path(gui)):
+        directory = _mask_directory_for_source(source_path)
+        if directory is not None:
+            return str(directory)
+    return os.getcwd()
+
+
+def _source_container_directory(source_path):
+    if not source_path:
+        return None
+    try:
+        source = Path(str(source_path)).expanduser()
+        if not source.exists():
+            return None
+        source = source.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    directory = source if source.is_dir() else source.parent
+    return directory if directory.is_dir() else None
+
+
+def get_mask_save_initial_directory(gui):
+    """Resolve the source container used as the mask save dialog default."""
+    meta = getattr(gui, 'meta', {}) or {}
+    for source_path in (meta.get('source_path'), _navigation_patient_path(gui)):
+        directory = _source_container_directory(source_path)
+        if directory is not None:
+            return str(directory)
+    return os.getcwd()
+
+
+def _prepare_imported_mask(image, path, reference, current_obj_id):
+    geometry_changed = not _geometry_matches(image, reference)
+    if geometry_changed:
+        image = sitk.Resample(
+            image,
+            reference,
+            sitk.Transform(),
+            sitk.sitkNearestNeighbor,
+            0,
+            image.GetPixelID(),
+        )
+    data = _validate_label_array(sitk.GetArrayFromImage(image), path)
+    if not np.any(data):
+        raise ValueError(
+            f"{path}: mask is empty after alignment to the source image; the physical geometries may not overlap."
+        )
+    unique = np.unique(data)
+    if np.array_equal(unique, [0, 1]) or np.array_equal(unique, [1]):
+        object_id = _binary_object_id(path, current_obj_id)
+        data = np.where(data > 0, object_id, 0).astype(np.int32)
+    return data, geometry_changed
+
+
+def _confirm_geometry_resampling(gui, mismatches, reference):
+    details = [
+        "The selected masks do not exactly match the source image geometry.",
+        "They must be resampled to the source grid with nearest-neighbor interpolation.",
+        "",
+        f"Source: {_geometry_description(reference)}",
+    ]
+    for path, image in mismatches[:4]:
+        details.append(f"{Path(path).name}: {_geometry_description(image)}")
+    if len(mismatches) > 4:
+        details.append(f"... and {len(mismatches) - 4} more file(s)")
+    details.extend(("", "Continue with physical-coordinate resampling?"))
+    answer = QMessageBox.question(
+        gui,
+        "Mask Geometry Mismatch",
+        "\n".join(details),
+        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.No,
+    )
+    return answer == QMessageBox.Yes
+
+
+def _choose_import_mode(gui):
+    dialog = QMessageBox(gui)
+    dialog.setIcon(QMessageBox.Question)
+    dialog.setWindowTitle("Existing Mask")
+    dialog.setText("A mask is already loaded. Replace it or merge into empty voxels?")
+    replace_button = dialog.addButton("Replace", QMessageBox.AcceptRole)
+    merge_button = dialog.addButton("Merge", QMessageBox.ActionRole)
+    dialog.addButton(QMessageBox.Cancel)
+    if hasattr(dialog, 'exec'):
+        dialog.exec()
+    else:
+        dialog.exec_()
+    clicked = dialog.clickedButton()
+    if clicked is replace_button:
+        return 'replace'
+    if clicked is merge_button:
+        return 'merge'
+    return 'cancel'
+
+
+def merge_source_masks_preserving_existing(current, imported):
+    """Merge imported labels into background voxels and report label conflicts."""
+    current = np.asarray(current, dtype=np.int32)
+    imported = np.asarray(imported, dtype=np.int32)
+    if current.shape != imported.shape:
+        raise ValueError(f"Mask shape mismatch: {current.shape} != {imported.shape}")
+    conflict = (current > 0) & (imported > 0) & (current != imported)
+    combined = current.copy()
+    fill = (combined == 0) & (imported > 0)
+    combined[fill] = imported[fill]
+    return combined, int(np.count_nonzero(conflict))
+
+
+def load_masks_manual(gui):
+    """Load one or more source-geometry label images into the manual GUI."""
+    initial_directory = get_mask_load_initial_directory(gui)
+    paths, _ = QFileDialog.getOpenFileNames(
+        gui, "Load Mask Images", initial_directory, _SUPPORTED_MASK_FILTER
+    )
+    if not paths:
+        return False
+
+    try:
+        display_shape = tuple(int(v) for v in gui.mask_layer.data.shape)
+        reference = build_mask_reference_image(gui.meta, display_shape)
+        images = [(path, _read_import_mask(path)) for path in paths]
+        mismatches = [
+            (path, image)
+            for path, image in images
+            if not _geometry_matches(image, reference)
+        ]
+        if mismatches and not _confirm_geometry_resampling(gui, mismatches, reference):
+            return False
+
+        imported = np.zeros(tuple(reversed(reference.GetSize())), dtype=np.int32)
+        resampled_count = 0
+        for path, image in images:
+            prepared, geometry_changed = _prepare_imported_mask(
+                image, path, reference, getattr(gui, 'current_obj_id', 1)
+            )
+            conflict = (imported > 0) & (prepared > 0) & (imported != prepared)
+            if np.any(conflict):
+                raise ValueError(
+                    f"{Path(path).name}: {int(np.count_nonzero(conflict))} voxels overlap "
+                    "labels from another selected file. Import was cancelled."
+                )
+            imported[prepared > 0] = prepared[prepared > 0]
+            resampled_count += int(geometry_changed)
+
+        if hasattr(gui, 'flush_source_mask_updates'):
+            gui.flush_source_mask_updates()
+        current = getattr(gui, 'source_mask_data', None)
+        if current is None or np.asarray(current).shape != imported.shape:
+            current = display_mask_to_source(gui.mask_layer.data, imported.shape)
+        else:
+            current = np.asarray(current, dtype=np.int32)
+
+        import_mode = 'replace'
+        ignored_conflicts = 0
+        if np.any(current):
+            import_mode = _choose_import_mode(gui)
+            if import_mode == 'cancel':
+                return False
+        if import_mode == 'merge':
+            combined, ignored_conflicts = merge_source_masks_preserving_existing(
+                current, imported
+            )
+        else:
+            combined = imported
+
+        if hasattr(gui, 'set_source_mask_data'):
+            gui.set_source_mask_data(combined, record_history=True)
+        else:
+            gui.source_mask_data = combined.copy()
+            gui._set_mask_data(source_mask_to_display(combined, display_shape))
+
+        labels = np.unique(combined)
+        labels = labels[labels > 0]
+        if labels.size:
+            maximum = max(100, int(labels.max()))
+            gui.oid_spin.setRange(1, maximum)
+            gui.oid_spin.setValue(int(labels.min()))
+        if hasattr(gui, '_update_object_id_text'):
+            gui._update_object_id_text()
+
+        message = (
+            f"Loaded {len(paths)} mask file(s).\n"
+            f"Labels: {', '.join(str(int(v)) for v in labels)}\n"
+            f"Source shape: {combined.shape}"
+        )
+        if resampled_count:
+            message += f"\nResampled to source geometry: {resampled_count} file(s)"
+        if ignored_conflicts:
+            message += f"\nMerge conflicts kept from current mask: {ignored_conflicts} voxels"
+        QMessageBox.information(gui, "Masks Loaded", message)
+        if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
+            gui.metrics.add_event(
+                'load_masks_manual',
+                file_count=len(paths),
+                label_count=int(labels.size),
+                resampled_count=resampled_count,
+                mode=import_mode,
+            )
+        return True
+    except Exception as exc:
+        print(f"Mask load failed: {_compact_exception(exc)}")
+        QMessageBox.critical(gui, "Mask Load Failed", str(exc))
+        return False
 
 
 def _save_volume_report(patient_dir: Path, entries):
@@ -81,7 +695,10 @@ def _get_save_patient_stem(gui):
 def save_masks_auto(gui):
     """Save masks from auto GUI."""
     try:
-        save_dir = QFileDialog.getExistingDirectory(gui, "Select Mask Save Folder", ".")
+        initial_directory = get_mask_save_initial_directory(gui)
+        save_dir = QFileDialog.getExistingDirectory(
+            gui, "Select Mask Save Folder", initial_directory
+        )
         if not save_dir:
             return
         save_dir = Path(save_dir)
@@ -145,7 +762,7 @@ def save_masks_auto(gui):
             mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
 
         mask_path = patient_dir / f"{patient_name}_full_mask.nii.gz"
-        sitk.WriteImage(mask_sitk, str(mask_path))
+        _write_nifti_image(mask_sitk, mask_path)
 
         unique_labels = np.unique(mask_data)
         unique_labels = unique_labels[unique_labels > 0]
@@ -179,7 +796,7 @@ def save_masks_auto(gui):
                 single_mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
 
             single_mask_path = patient_dir / f"{patient_name}_mask_label_{label}.nii.gz"
-            sitk.WriteImage(single_mask_sitk, str(single_mask_path))
+            _write_nifti_image(single_mask_sitk, single_mask_path)
             voxels = int(single_mask.sum())
             volume_entries.append((label, voxels, voxels * voxel_volume))
             saved_count += 1
@@ -219,149 +836,64 @@ def save_masks_auto(gui):
 
 
 def save_masks_manual(gui):
-    """Save masks from manual GUI (per object IDs)."""
+    """Save the canonical source-grid mask from the manual GUI."""
     try:
-        save_dir = QFileDialog.getExistingDirectory(gui, "Select Mask Save Folder", ".")
+        initial_directory = get_mask_save_initial_directory(gui)
+        save_dir = QFileDialog.getExistingDirectory(
+            gui, "Select Mask Save Folder", initial_directory
+        )
         if not save_dir:
             return
         save_dir = Path(save_dir)
         patient_name = _get_save_patient_stem(gui)
         patient_dir = save_dir / f"{patient_name}_masks"
-        patient_dir.mkdir(exist_ok=True)
+        patient_dir.mkdir(parents=True, exist_ok=True)
 
-        mask3d_resized = gui.mask_layer.data
-        if mask3d_resized.sum() == 0:
+        if hasattr(gui, 'flush_source_mask_updates'):
+            gui.flush_source_mask_updates()
+        display_mask = np.asarray(gui.mask_layer.data)
+        source_shape, spacing, _, _ = get_mask_geometry(gui.meta, display_mask.shape)
+        source_mask = getattr(gui, 'source_mask_data', None)
+        if source_mask is None or np.asarray(source_mask).shape != source_shape:
+            source_mask = display_mask_to_source(display_mask, source_shape)
+        source_mask = _validate_label_array(source_mask, "Current mask")
+        if not np.any(source_mask):
             QMessageBox.warning(gui, "Save Failed", "No masks to save.")
             if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
                 gui.metrics.add_event('save_skipped', reason='no_masks')
             return
 
         save_start = time.time()
-
-        ori_shape = gui.meta.get('shape', mask3d_resized.shape)
-        if hasattr(ori_shape, 'numpy'):
-            ori_shape = ori_shape.numpy()
-        elif isinstance(ori_shape, torch.Tensor):
-            ori_shape = ori_shape.cpu().numpy()
-        else:
-            ori_shape = np.array(ori_shape)
-        ori_shape = np.array(ori_shape).flatten()
-
-        resize_needed = False
-        if len(ori_shape) >= 3:
-            ori_z, ori_y, ori_x = int(ori_shape[0]), int(ori_shape[1]), int(ori_shape[2])
-            if (ori_z, ori_y, ori_x) != mask3d_resized.shape:
-                resize_needed = True
-        else:
-            ori_z, ori_y, ori_x = mask3d_resized.shape
-
-        spacing_raw = gui.meta.get('spacing', [1.0, 1.0, 1.0])
-        origin_raw = gui.meta.get('origin', [0.0, 0.0, 0.0])
-        direction_raw = gui.meta.get('direction', np.eye(3).flatten())
-
-        spacing = spacing_raw.cpu().numpy() if hasattr(spacing_raw, 'cpu') else np.array(spacing_raw)
-        origin = origin_raw.cpu().numpy() if hasattr(origin_raw, 'cpu') else np.array(origin_raw)
-        direction = direction_raw.cpu().numpy() if hasattr(direction_raw, 'cpu') else np.array(direction_raw)
-
-        spacing = np.array(spacing).flatten().astype(float)
-        origin = np.array(origin).flatten().astype(float)
-        direction = np.array(direction).flatten().astype(float)
-
-        full_mask = (mask3d_resized > 0).astype(np.uint8)
-        if resize_needed:
-            full_mask_original = np.zeros((ori_z, ori_y, ori_x), dtype=np.uint8)
-            for z in range(min(full_mask.shape[0], ori_z)):
-                if full_mask[z].sum() > 0:
-                    mask_slice_pil = Image.fromarray(full_mask[z].astype(np.uint8))
-                    mask_slice_resized = mask_slice_pil.resize((ori_x, ori_y), Image.NEAREST)
-                    full_mask_original[z] = np.array(mask_slice_resized)
-        else:
-            full_mask_original = full_mask
-
-        full_mask_sitk = sitk.GetImageFromArray(full_mask_original)
-        try:
-            if len(spacing) >= 3:
-                full_mask_sitk.SetSpacing(tuple(spacing[:3]))
-            if len(origin) >= 3:
-                full_mask_sitk.SetOrigin(tuple(origin[:3]))
-            if len(direction) == 9:
-                full_mask_sitk.SetDirection(tuple(direction))
-            elif len(direction) == 4:
-                full_mask_sitk.SetDirection(tuple(direction))
-            else:
-                full_mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
-        except Exception as e:
-            print(f"❌ Full mask geometric information setting error: {e}")
-            full_mask_sitk.SetSpacing((1.0, 1.0, 1.0))
-            full_mask_sitk.SetOrigin((0.0, 0.0, 0.0))
-            full_mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
-
+        reference = build_mask_reference_image(gui.meta, display_mask.shape)
+        full_mask_sitk = sitk.GetImageFromArray(source_mask.astype(np.int32))
+        full_mask_sitk.CopyInformation(reference)
         full_mask_path = patient_dir / f"{patient_name}_full_mask.nii.gz"
-        sitk.WriteImage(full_mask_sitk, str(full_mask_path))
+        _write_nifti_image(full_mask_sitk, full_mask_path)
 
-        saved_full_mask = sitk.ReadImage(str(full_mask_path))
-        saved_direction = np.array(saved_full_mask.GetDirection())
-        if len(saved_direction) == 9 and len(direction) == 9:
-            diff = np.abs(saved_direction - direction).max()
-            if diff >= 1e-6:
-                print("⚠️  Full mask Direction slight difference detected")
-
-        unique_labels = np.unique(mask3d_resized)
-        unique_labels = unique_labels[unique_labels > 0]
-        saved_count = 0
-        volume_entries = []
-
-        voxel_volume = _compute_voxel_volume(spacing)
-        for object_id in unique_labels:
-            object_mask = (mask3d_resized == object_id).astype(np.uint8)
-            if object_mask.sum() == 0:
-                continue
-            if resize_needed:
-                object_mask_original = np.zeros((ori_z, ori_y, ori_x), dtype=np.uint8)
-                for z in range(min(object_mask.shape[0], ori_z)):
-                    if object_mask[z].sum() > 0:
-                        mask_slice_pil = Image.fromarray(object_mask[z].astype(np.uint8))
-                        mask_slice_resized = mask_slice_pil.resize((ori_x, ori_y), Image.NEAREST)
-                        object_mask_original[z] = np.array(mask_slice_resized)
-            else:
-                object_mask_original = object_mask
-
-            object_mask_sitk = sitk.GetImageFromArray(object_mask_original)
-            try:
-                if len(spacing) >= 3:
-                    object_mask_sitk.SetSpacing(tuple(spacing[:3]))
-                if len(origin) >= 3:
-                    object_mask_sitk.SetOrigin(tuple(origin[:3]))
-                if len(direction) == 9:
-                    object_mask_sitk.SetDirection(tuple(direction))
-                elif len(direction) == 4:
-                    object_mask_sitk.SetDirection(tuple(direction))
-                else:
-                    object_mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
-            except Exception as e:
-                print(f"❌ Object {object_id} geometric information setting error: {e}")
-                object_mask_sitk.SetSpacing((1.0, 1.0, 1.0))
-                object_mask_sitk.SetOrigin((0.0, 0.0, 0.0))
-                object_mask_sitk.SetDirection(tuple(np.eye(3).flatten()))
-
+        volume_entries = compute_label_volume_entries(source_mask, spacing)
+        expected_object_paths = set()
+        for object_id, _, _ in volume_entries:
+            object_mask = (source_mask == object_id).astype(np.uint8)
+            object_mask_sitk = sitk.GetImageFromArray(object_mask)
+            object_mask_sitk.CopyInformation(reference)
             object_mask_path = patient_dir / f"{patient_name}_mask_objectID_{object_id}.nii.gz"
-            sitk.WriteImage(object_mask_sitk, str(object_mask_path))
-            voxels = int(object_mask.sum())
-            volume_entries.append((object_id, voxels, voxels * voxel_volume))
-            saved_count += 1
+            _write_nifti_image(object_mask_sitk, object_mask_path)
+            expected_object_paths.add(object_mask_path.resolve())
+
+        stale_pattern = f"{patient_name}_mask_objectID_*.nii.gz"
+        for stale_path in patient_dir.glob(stale_pattern):
+            if stale_path.resolve() not in expected_object_paths:
+                stale_path.unlink()
 
         _save_volume_report(patient_dir, volume_entries)
-
         message = (
             f"Masks have been successfully saved!\n"
             f"Save location: {patient_dir}\n"
             f"Full mask: {full_mask_path.name}\n"
-            f"Individual masks for each Object ID: {saved_count} files\n"
-            f"Volumes: volumes.txt (object_id, voxel_count, volume_mm3)"
+            f"Individual masks for each Object ID: {len(volume_entries)} files\n"
+            f"Volumes: volumes.txt (object_id, voxel_count, volume_mm3)\n"
+            f"Source grid: {source_mask.shape}"
         )
-        if resize_needed:
-            message += f"\nRestored to original size: {full_mask_original.shape}"
-
         QMessageBox.information(gui, "Save Complete", message)
         if hasattr(gui, 'metrics') and gui.metrics and gui.metrics.is_active():
             gui.metrics.record_stage(
@@ -369,8 +901,8 @@ def save_masks_manual(gui):
                 save_start,
                 time.time(),
                 patient_id=str(patient_name),
-                labels_saved=int(saved_count),
-                slice_count=int(mask3d_resized.shape[0]) if hasattr(mask3d_resized, 'shape') else None,
+                labels_saved=len(volume_entries),
+                slice_count=int(source_mask.shape[0]),
                 save_dir=str(patient_dir),
             )
             gui.metrics.finalize({'mode': 'manual', 'save_dir': str(patient_dir)})

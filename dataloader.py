@@ -1,4 +1,6 @@
 import os
+import re
+from functools import lru_cache
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -13,28 +15,97 @@ def _strip_nii_ext(name: str):
     return name[:-7] if name.lower().endswith('.nii.gz') else name[:-4] if name.lower().endswith('.nii') else name
 
 
+@lru_cache(maxsize=4096)
+def _cached_nifti_is_label_map(path, file_size, modified_ns, max_unique_labels):
+    """Inspect a stable NIfTI file revision and conservatively detect label maps."""
+    del file_size, modified_ns
+    try:
+        import nibabel as nib
+
+        image = nib.load(path)
+        if len(image.shape) != 3:
+            return False
+
+        intent_name = str(image.header.get_intent()[0]).lower()
+        if intent_name == 'label':
+            return True
+
+        data = np.asanyarray(image.dataobj)
+        if data.size == 0 or not np.issubdtype(data.dtype, np.number):
+            return False
+        if not np.all(np.isfinite(data)):
+            return False
+
+        minimum = float(np.min(data))
+        if minimum < 0.0:
+            return False
+        if np.issubdtype(data.dtype, np.floating):
+            rounded = np.rint(data)
+            if not np.allclose(data, rounded, rtol=0.0, atol=1e-6):
+                return False
+
+        return int(np.unique(data).size) <= int(max_unique_labels)
+    except Exception as exc:
+        print(
+            f"Warning: Could not inspect NIfTI for label data; keeping it in the "
+            f"patient list: {path} ({exc})"
+        )
+        return False
+
+
+def nifti_is_label_map(path, max_unique_labels=64):
+    """Return True when a NIfTI file has the value characteristics of a label map."""
+    try:
+        absolute_path = os.path.abspath(os.fspath(path))
+        stat = os.stat(absolute_path)
+    except (OSError, TypeError, ValueError) as exc:
+        print(
+            f"Warning: Could not stat NIfTI for label detection; keeping it in the "
+            f"patient list: {path} ({exc})"
+        )
+        return False
+    return _cached_nifti_is_label_map(
+        absolute_path,
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(max_unique_labels),
+    )
+
+
 def discover_studies(data_root, exclude_dirs=('preprocessed',)):
     """Discover NIfTI files and DICOM series directories under a root path."""
     studies = []
 
+    def add_nifti(path, name):
+        if nifti_is_label_map(path):
+            print(f"Skipping NIfTI label map from patient list: {path}")
+            return
+        studies.append((path, name))
+
     if os.path.isfile(data_root):
         lower = data_root.lower()
         if lower.endswith('.nii') or lower.endswith('.nii.gz'):
-            studies.append((data_root, _strip_nii_ext(data_root)))
+            add_nifti(data_root, _strip_nii_ext(data_root))
             return studies
         if lower.endswith('.dcm'):
             parent = os.path.dirname(data_root)
             studies.append((parent, os.path.basename(parent)))
             return studies
 
+    excluded_names = {str(name).casefold() for name in exclude_dirs}
     for root, dirs, files in os.walk(data_root):
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        dirs[:] = [
+            directory
+            for directory in dirs
+            if directory.casefold() not in excluded_names
+            and not directory.casefold().endswith('_masks')
+        ]
 
         for fname in sorted(files):
             lower = fname.lower()
             if lower.endswith('.nii') or lower.endswith('.nii.gz'):
                 fpath = os.path.join(root, fname)
-                studies.append((fpath, _strip_nii_ext(fname)))
+                add_nifti(fpath, _strip_nii_ext(fname))
 
         if any(f.lower().endswith('.dcm') for f in files):
             studies.append((root, os.path.basename(root)))
@@ -247,6 +318,338 @@ def load_nii_image(image_path):
     arr = sitk.GetArrayFromImage(img_sitk)
     return arr, img_sitk
 
+
+DICOM_SPACING_SOURCE_META_KEY = "dicom_spacing_source"
+DICOM_SELECTED_SERIES_META_KEY = "dicom_selected_series_uid"
+DICOM_SLICE_SPACING_META_KEY = "dicom_slice_spacing"
+
+
+def _dicom_float_values(value):
+    """Convert common DICOM scalar/multivalue fields to finite floats."""
+    if value is None:
+        return []
+    if isinstance(value, bytes):
+        value = value.decode(errors="ignore")
+    if isinstance(value, str):
+        parts = value.split("\\")
+    else:
+        try:
+            parts = list(value)
+        except TypeError:
+            parts = [value]
+
+    values = []
+    for part in parts:
+        if part is None:
+            continue
+        text = str(part).strip()
+        if not text:
+            continue
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(number):
+            values.append(number)
+    return values
+
+
+def _median_positive_dicom_value(values):
+    numbers = []
+    for value in values:
+        for number in _dicom_float_values(value):
+            if number > 0:
+                numbers.append(number)
+    if not numbers:
+        return None
+    return float(np.median(numbers))
+
+
+def _infer_spacing_from_folder_name(folder):
+    folder_name = os.path.basename(os.path.normpath(folder))
+    match = re.search(r"(?i)(?:^|[_\-\s])(\d+(?:\.\d+)?)\s*mm$", folder_name)
+    if not match:
+        return None
+    try:
+        spacing = float(match.group(1))
+    except ValueError:
+        return None
+    return spacing if spacing > 0 else None
+
+
+def _dicom_instance_number(ds):
+    values = _dicom_float_values(getattr(ds, "InstanceNumber", None))
+    return int(values[0]) if values else None
+
+
+def _sort_dicom_items_by_instance_or_name(items):
+    def sort_key(item):
+        path, ds = item
+        instance_number = _dicom_instance_number(ds)
+        if instance_number is not None:
+            return (0, instance_number, os.path.basename(path))
+        return (1, os.path.basename(path))
+
+    return sorted(items, key=sort_key)
+
+
+def _dicom_orientation_vectors(items):
+    for _, ds in items:
+        orientation = _dicom_float_values(getattr(ds, "ImageOrientationPatient", None))
+        if len(orientation) < 6:
+            continue
+        row = np.asarray(orientation[:3], dtype=float)
+        col = np.asarray(orientation[3:6], dtype=float)
+        row_norm = np.linalg.norm(row)
+        col_norm = np.linalg.norm(col)
+        if row_norm <= 0 or col_norm <= 0:
+            continue
+        row = row / row_norm
+        col = col / col_norm
+        normal = np.cross(row, col)
+        normal_norm = np.linalg.norm(normal)
+        if normal_norm <= 0:
+            continue
+        normal = normal / normal_norm
+        return row, col, normal
+    return None
+
+
+def _direction_from_orientation(row, col, normal):
+    direction_matrix = np.column_stack((row, col, normal))
+    return tuple(float(v) for v in direction_matrix.flatten())
+
+
+def _origin_from_dicom_item(item):
+    _, ds = item
+    position = _dicom_float_values(getattr(ds, "ImagePositionPatient", None))
+    if len(position) >= 3:
+        return tuple(float(v) for v in position[:3])
+    return (0.0, 0.0, 0.0)
+
+
+def _infer_dicom_slice_order_and_spacing(items, folder, duplicate_tolerance=1e-4):
+    """
+    Return ordered DICOM items, z spacing, spacing source, origin, and direction.
+
+    Spacing priority:
+    1. ImagePositionPatient projected onto the slice normal
+    2. positive SpacingBetweenSlices values
+    3. positive SliceThickness values
+    4. folder-name suffix like *_3mm
+    """
+    orientation = _dicom_orientation_vectors(items)
+    if orientation is not None:
+        row, col, normal = orientation
+        direction = _direction_from_orientation(row, col, normal)
+        position_records = []
+        for item in items:
+            _, ds = item
+            position = _dicom_float_values(getattr(ds, "ImagePositionPatient", None))
+            if len(position) < 3:
+                continue
+            position_arr = np.asarray(position[:3], dtype=float)
+            projection = float(np.dot(position_arr, normal))
+            position_records.append((projection, item))
+
+        if len(position_records) == len(items):
+            position_records.sort(key=lambda record: record[0])
+            projections = np.asarray([record[0] for record in position_records], dtype=float)
+            diffs = np.diff(projections)
+            duplicate_diffs = [d for d in diffs if abs(float(d)) <= duplicate_tolerance]
+            if duplicate_diffs:
+                raise RuntimeError(
+                    "Duplicate DICOM slice positions detected after applying "
+                    "ImagePositionPatient/ImageOrientationPatient. Cannot infer a "
+                    "unique 3D slice order."
+                )
+
+            nonzero_diffs = [abs(float(d)) for d in diffs if abs(float(d)) > duplicate_tolerance]
+            if nonzero_diffs:
+                spacing = float(np.median(nonzero_diffs))
+                ordered_items = [item for _, item in position_records]
+                return ordered_items, spacing, "dicom_position", _origin_from_dicom_item(ordered_items[0]), direction
+    else:
+        direction = tuple(np.eye(3).flatten())
+
+    ordered_items = _sort_dicom_items_by_instance_or_name(items)
+    spacing = _median_positive_dicom_value(
+        [getattr(ds, "SpacingBetweenSlices", None) for _, ds in items]
+    )
+    if spacing is not None:
+        return ordered_items, spacing, "spacing_between_slices", _origin_from_dicom_item(ordered_items[0]), direction
+
+    spacing = _median_positive_dicom_value(
+        [getattr(ds, "SliceThickness", None) for _, ds in items]
+    )
+    if spacing is not None:
+        return ordered_items, spacing, "slice_thickness", _origin_from_dicom_item(ordered_items[0]), direction
+
+    spacing = _infer_spacing_from_folder_name(folder)
+    if spacing is not None:
+        return ordered_items, spacing, "folder_name", _origin_from_dicom_item(ordered_items[0]), direction
+
+    raise RuntimeError(
+        "Could not infer DICOM slice spacing from slice positions, "
+        "SpacingBetweenSlices, SliceThickness, or a folder-name suffix like *_3mm."
+    )
+
+
+def _infer_dicom_pixel_spacing(items):
+    row_spacings = []
+    col_spacings = []
+    for _, ds in items:
+        pixel_spacing = _dicom_float_values(getattr(ds, "PixelSpacing", None))
+        if len(pixel_spacing) >= 2 and pixel_spacing[0] > 0 and pixel_spacing[1] > 0:
+            row_spacings.append(pixel_spacing[0])
+            col_spacings.append(pixel_spacing[1])
+    if not row_spacings or not col_spacings:
+        raise RuntimeError("Could not infer in-plane DICOM PixelSpacing.")
+    return float(np.median(col_spacings)), float(np.median(row_spacings))
+
+
+def _collect_dicom_candidate_files(folder):
+    search_dir = os.path.dirname(folder) if os.path.isfile(folder) else folder
+    if not os.path.isdir(search_dir):
+        raise RuntimeError(f"DICOM path is not a folder: {folder}")
+
+    dcm_files = [
+        os.path.join(search_dir, f)
+        for f in os.listdir(search_dir)
+        if f.lower().endswith(".dcm") and os.path.isfile(os.path.join(search_dir, f))
+    ]
+    if dcm_files:
+        return sorted(dcm_files)
+
+    return sorted(
+        os.path.join(search_dir, f)
+        for f in os.listdir(search_dir)
+        if not f.startswith(".") and os.path.isfile(os.path.join(search_dir, f))
+    )
+
+
+def _dicom_single_float(ds, name, default):
+    values = _dicom_float_values(getattr(ds, name, None))
+    return float(values[0]) if values else default
+
+
+def _stack_dicom_pixel_arrays(ordered_items):
+    arrays = []
+    first_shape = None
+    for path, ds in ordered_items:
+        try:
+            arr = np.asarray(ds.pixel_array)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to decode DICOM pixel data from {path}: {exc}") from exc
+
+        if arr.ndim == 3 and arr.shape[0] == 1:
+            arr = arr[0]
+        if arr.ndim != 2:
+            raise RuntimeError(
+                f"Unsupported DICOM pixel array shape {arr.shape} in {path}; expected one 2D slice per file."
+            )
+        if first_shape is None:
+            first_shape = arr.shape
+        elif arr.shape != first_shape:
+            raise RuntimeError(
+                f"Inconsistent DICOM slice shape in {path}: {arr.shape} != {first_shape}"
+            )
+
+        slope = _dicom_single_float(ds, "RescaleSlope", 1.0)
+        intercept = _dicom_single_float(ds, "RescaleIntercept", 0.0)
+        if slope != 1.0 or intercept != 0.0:
+            arr = arr.astype(np.float32) * slope + intercept
+        arrays.append(arr)
+
+    if not arrays:
+        raise RuntimeError("No DICOM pixel arrays could be decoded.")
+    return np.stack(arrays, axis=0)
+
+
+def _load_dicom_series_with_pydicom_spacing_fallback(folder, debug_geometry=False):
+    try:
+        import pydicom
+    except ImportError as exc:
+        raise RuntimeError("pydicom is required for DICOM spacing fallback.") from exc
+
+    candidate_files = _collect_dicom_candidate_files(folder)
+    if not candidate_files:
+        raise RuntimeError(f"No DICOM files found in {folder}")
+
+    series_groups = {}
+    read_errors = []
+    for path in candidate_files:
+        try:
+            ds = pydicom.dcmread(path, force=True)
+        except Exception as exc:
+            read_errors.append((path, exc))
+            continue
+        if not hasattr(ds, "PixelData"):
+            continue
+        series_uid = str(getattr(ds, "SeriesInstanceUID", "NO_SERIES_UID"))
+        try:
+            rows = int(getattr(ds, "Rows", 0) or 0)
+            cols = int(getattr(ds, "Columns", 0) or 0)
+        except (TypeError, ValueError):
+            rows, cols = 0, 0
+        group_key = (series_uid, rows, cols)
+        series_groups.setdefault(group_key, []).append((path, ds))
+
+    if not series_groups:
+        detail = f" Read errors: {len(read_errors)}." if read_errors else ""
+        raise RuntimeError(f"No readable DICOM pixel series found in {folder}.{detail}")
+
+    selected_key, selected_items = max(
+        series_groups.items(),
+        key=lambda kv: (len(kv[1]), int(kv[0][1] or 0) * int(kv[0][2] or 0)),
+    )
+    selected_uid, selected_rows, selected_cols = selected_key
+    if len(series_groups) > 1:
+        print(
+            f"Warning: found {len(series_groups)} DICOM series/shape groups in {folder}; "
+            f"using series {selected_uid} shape {selected_rows}x{selected_cols} "
+            f"with {len(selected_items)} files."
+        )
+    if read_errors and debug_geometry:
+        print(f"Skipped {len(read_errors)} unreadable DICOM files during pydicom fallback.")
+
+    ordered_items, z_spacing, spacing_source, origin, direction = _infer_dicom_slice_order_and_spacing(
+        selected_items, folder
+    )
+    x_spacing, y_spacing = _infer_dicom_pixel_spacing(ordered_items)
+    arr = _stack_dicom_pixel_arrays(ordered_items)
+
+    img_sitk = sitk.GetImageFromArray(arr)
+    img_sitk.SetSpacing((x_spacing, y_spacing, z_spacing))
+    img_sitk.SetOrigin(origin)
+    img_sitk.SetDirection(direction)
+    img_sitk.SetMetaData(DICOM_SPACING_SOURCE_META_KEY, spacing_source)
+    img_sitk.SetMetaData(DICOM_SELECTED_SERIES_META_KEY, selected_uid)
+    img_sitk.SetMetaData(DICOM_SLICE_SPACING_META_KEY, f"{z_spacing:.12g}")
+
+    if spacing_source == "folder_name":
+        print(
+            f"Warning: using DICOM slice spacing {z_spacing:g} mm inferred from "
+            f"folder name '{os.path.basename(os.path.normpath(folder))}'."
+        )
+
+    if debug_geometry:
+        print(f"\n=== DICOM pydicom Fallback Loading Results ===")
+        print(f"Folder: {folder}")
+        print(f"Series UID: {selected_uid}")
+        print(f"DICOM files: {len(ordered_items)}")
+        print(f"Image size: {img_sitk.GetSize()}")
+        print(f"Array shape: {arr.shape}")
+        print(f"Spacing: {img_sitk.GetSpacing()} (source: {spacing_source})")
+        print(f"Origin: {img_sitk.GetOrigin()}")
+        print(f"Direction: {img_sitk.GetDirection()}")
+        print(f"Data range: {arr.min():.3f} ~ {arr.max():.3f}")
+        print(f"Data dtype: {arr.dtype}")
+        print("=" * 50)
+
+    return arr, img_sitk
+
+
 def load_dicom_series(folder, debug_geometry=False):
     """
     Load a DICOM series while preserving geometry.
@@ -302,27 +705,18 @@ def load_dicom_series(folder, debug_geometry=False):
         return arr, img_sitk
         
     except Exception as e:
-        print(f"Failed to load DICOM series: {e}")
-        # Fallback: try individual DICOM files
-        import glob
-        dcm_files = glob.glob(os.path.join(folder, "*.dcm"))
-        if not dcm_files:
-            # Also try files without extension
-            all_files = [f for f in os.listdir(folder) if not f.startswith('.')]
-            dcm_files = [os.path.join(folder, f) for f in all_files]
-        
-        if dcm_files:
-            print(f"Retrying with individual DICOM files: {len(dcm_files)} files")
-            reader.SetFileNames(sorted(dcm_files))
-            img_sitk = reader.Execute()
-            arr = sitk.GetArrayFromImage(img_sitk)
-            
-            if debug_geometry:
-                print(f"Fallback load success: {arr.shape}, spacing: {img_sitk.GetSpacing()}")
-            
-            return arr, img_sitk
-        else:
-            raise RuntimeError(f"No valid DICOM files found in {folder}")
+        print(f"Failed to load DICOM series with SimpleITK: {e}")
+        print("Retrying with pydicom geometry/spacing fallback...")
+        try:
+            return _load_dicom_series_with_pydicom_spacing_fallback(
+                folder, debug_geometry=debug_geometry
+            )
+        except Exception as fallback_error:
+            raise RuntimeError(
+                "Failed to load DICOM series with both SimpleITK and pydicom "
+                f"spacing fallback. SimpleITK error: {e}. "
+                f"Fallback error: {fallback_error}"
+            ) from fallback_error
 
 def generate_prompt_from_mask(mask_slice, prompt_type="point"):
     coords = np.argwhere(mask_slice > 0)
@@ -557,8 +951,19 @@ class SNU3DMRI_MedSAM2Dataset(Dataset):
             "origin": origin,
             "direction": direction,
             "slice_thickness": slice_thickness,
-            "patient": patient_name
+            "patient": patient_name,
+            "source_path": os.path.abspath(path),
         }
+        for dicom_meta_key in (
+            DICOM_SPACING_SOURCE_META_KEY,
+            DICOM_SELECTED_SERIES_META_KEY,
+            DICOM_SLICE_SPACING_META_KEY,
+        ):
+            try:
+                if img_sitk.HasMetaDataKey(dicom_meta_key):
+                    meta[dicom_meta_key] = img_sitk.GetMetaData(dicom_meta_key)
+            except Exception:
+                pass
 
         # Precompute raw volume for nnUNet (no resizing)
         images_nnunet = torch.from_numpy(arr_3d.astype(np.float32))
