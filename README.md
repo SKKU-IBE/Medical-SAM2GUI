@@ -10,7 +10,7 @@ The software is intended for research annotation workflows. It is not a medical 
 
 ![Manual mode with a reloaded multi-label mask and live source-grid volumes](./images/manual-mask-resume.png)
 
-The demonstration uses the public TCIA `UCSD-PTGBM-0001_01` case. Asset provenance and attribution are recorded in [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
+The demonstration uses the public TCIA `UCSD-PTGBM-0001_01` case. The corresponding FLAIR volume and tumor label map are included in [`test_data/`](test_data/README.md) under CC BY 4.0. Asset provenance and attribution are recorded in [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
 
 ## Workflow
 
@@ -101,6 +101,20 @@ Select one root directory. The application recursively finds:
 NIfTI files are conservatively classified as label maps when their header intent is `label`, or when a finite, non-negative 3D volume contains integer-valued data with at most 64 unique labels. Detected label maps are excluded from the patient queue. If inspection fails, the file is retained and a warning is printed rather than silently dropping a possible image.
 
 Generated `*_masks` folders and `preprocessed` folders are never searched as patients. This keeps prior results beside their source study without presenting them as new image volumes.
+
+## Bundled Demonstration Data
+
+The source repository includes a single public demonstration case in `test_data/`:
+
+```text
+test_data/
+  UCSD-PTGBM-0001_01_FLAIR.nii.gz
+  UCSD-PTGBM-0001_01_BraTS_tumor_seg.nii.gz
+```
+
+Select `test_data/` as the cohort root to open the FLAIR image. Study discovery excludes the integer label map from the patient queue; load it from Manual mode with `Load Masks` to reproduce the resume workflow. The example is not required for normal operation or the automated test suite and is not installed as runtime Python package data.
+
+These NIfTI files come from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data package and retain its [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) license. See [`test_data/README.md`](test_data/README.md) for checksums, citation, attribution, and data-use conditions.
 
 ## Manual Annotation
 
@@ -215,4 +229,4 @@ Release metadata are provided in [CITATION.cff](CITATION.cff). The related prepr
 
 ## License
 
-Project code is distributed under `GPL-3.0-only`; see [LICENSE](LICENSE). Bundled Medical-SAM2/SAM2-derived code retains its Apache-2.0 notice, and the connected-components implementation retains its BSD-3-Clause notice. The checkpoint and source medical volumes are not redistributed. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
+Project code is distributed under `GPL-3.0-only`; see [LICENSE](LICENSE). Bundled Medical-SAM2/SAM2-derived code retains its Apache-2.0 notice, and the connected-components implementation retains its BSD-3-Clause notice. The checkpoint is not redistributed. Files in `test_data/` and their derived media retain the dataset's CC BY 4.0 license and are not relicensed under GPL. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).

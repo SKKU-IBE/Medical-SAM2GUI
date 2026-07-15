@@ -15,5 +15,8 @@ this software paper and are not reported while the applicable ethics status is
 unconfirmed.
 
 Public screenshots and animation use the TCIA UCSD-PTGBM BraTS-GLI 2024 Test
-Data. Their source and processing record is provided in
+Data. One FLAIR volume and its corresponding tumor label map are bundled under
+CC BY 4.0 to make the documented GUI workflow reproducible. Their source,
+checksums, attribution, and processing record are provided in
+[`test_data/README.md`](test_data/README.md) and
 [`MEDIA_PROVENANCE.md`](MEDIA_PROVENANCE.md).

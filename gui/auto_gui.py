@@ -17,13 +17,14 @@ from qtpy.QtGui import QKeySequence
 from qtpy.QtCore import Qt
 from collections import deque, defaultdict
 import traceback
-import threading
 from scipy.ndimage import center_of_mass
 
+from gui.box_interactions import DeferredBoxCommit, set_shapes_mode
 from gui.prompts import make_initial_label_stack, normalize_box_prompts, normalize_point_prompts
 from gui.rendering import render_manual_volume
 from gui.io import save_masks_auto
 from gui.metrics import UsageMetricsRecorder
+from gui.view_controls import create_view_rotation_controls
 
 
 class MedSAM2NapariGUI(QWidget):
@@ -244,8 +245,10 @@ class MedSAM2NapariGUI(QWidget):
         self._setup_box_editing_events()
 
     def _setup_box_editing_events(self):
-        """Setup box editing events - debounced data change detection"""
-        self._user_box_edit_timer = None
+        """Synchronize Shapes data after the active drag has finished."""
+        self._user_box_edit_committer = DeferredBoxCommit(
+            self, self._sync_user_boxes_with_rectangle_constraint
+        )
             
         @self.user_box_layer.events.data.connect
         def on_user_boxes_data_change():
@@ -253,10 +256,7 @@ class MedSAM2NapariGUI(QWidget):
                 return
             if getattr(self, '_updating_user_boxes', False):
                 return
-            if self._user_box_edit_timer:
-                self._user_box_edit_timer.cancel()
-            self._user_box_edit_timer = threading.Timer(0.3, self._sync_user_boxes_with_rectangle_constraint)
-            self._user_box_edit_timer.start()
+            self._user_box_edit_committer.schedule()
 
     def _record_prompt_event(self, kind, frame_idx, obj_id):
         if not self.metrics or not self.metrics.is_active():
@@ -461,6 +461,10 @@ class MedSAM2NapariGUI(QWidget):
         self.obj_spin.valueChanged.connect(self.on_obj_change)
         ohl.addWidget(self.obj_spin)
         layout.addLayout(ohl)
+        self.view_rotation_controls = create_view_rotation_controls(
+            self, self.viewer
+        )
+        layout.addWidget(self.view_rotation_controls)
         self.manual_edit_button = None
         btns = [
             ('Add + Point', self.enable_add_user_pos, 'btn_add_pos'),
@@ -757,9 +761,9 @@ class MedSAM2NapariGUI(QWidget):
         self.img_layer.mouse_drag_callbacks.clear()
         self.mask_layer.mouse_drag_callbacks.clear()
         try:
-            self.user_box_layer.mouse_drag_callbacks.clear()
+            self.user_box_layer.mode = 'pan_zoom'
         except Exception:
-            pass
+            self.user_box_layer.mouse_drag_callbacks.clear()
         if self.active_tool == 'edit_pts':
             self.user_pts_layer.editable = False
         if self.active_tool == 'edit_boxes':
@@ -850,38 +854,21 @@ class MedSAM2NapariGUI(QWidget):
         self._select_layer(self.user_box_layer)
         self.user_box_layer.editable = True
         try:
-            self.user_box_layer.mode = 'add_rectangle'
+            current_properties = dict(self.user_box_layer.current_properties)
+            current_properties['obj_id'] = np.asarray(
+                [self.current_obj_id], dtype=int
+            )
+            self.user_box_layer.current_properties = current_properties
+        except Exception:
+            pass
+        try:
+            set_shapes_mode(self.user_box_layer, 'add_rectangle')
         except Exception:
             pass
         self._set_button_active(self.btn_add_box, True)
         self._set_button_active(self.btn_add_pos, False)
         self._set_button_active(self.btn_add_neg, False)
-        pts = []
-        def cb(layer, evt):
-            if self.manual_edit_enabled:
-                return
-            if evt.type != 'mouse_press': return
-            t = int(self.viewer.dims.current_step[0])
-            y, x = map(int, evt.position[1:])
-            pts.append((x, y))
-            if len(pts) == 2:
-                x1, y1 = pts[0]
-                x2, y2 = pts[1]
-                if t not in self.box_prompts:
-                    self.box_prompts[t] = {}
-                self.box_prompts[t][self.current_obj_id] = [x1, y1, x2, y2]
-                self.prompt_history.append(('add_box', t, self.current_obj_id, x1, y1, x2, y2))
-                self.redo_history.clear()
-                pts.clear()
-                self.update_prompt_layers()
-                self._record_prompt_event('user_box', t, self.current_obj_id)
-                print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
-                # Exit box-add mode after one completed box to avoid drag callbacks
-                # interfering with subsequent pan/zoom interactions.
-                self.cancel_prompt_mode()
         self.mask_layer.mouse_drag_callbacks.clear()
-        self.user_box_layer.mouse_drag_callbacks.clear()
-        self.user_box_layer.mouse_drag_callbacks.append(cb)
 
     def toggle_manual_annotation(self):
         # Enable napari's native painting/box drawing without needing prompt buttons
@@ -990,7 +977,7 @@ class MedSAM2NapariGUI(QWidget):
         self._select_layer(self.user_box_layer)
         self.user_box_layer.editable = True
         try:
-            self.user_box_layer.mode = 'select'
+            set_shapes_mode(self.user_box_layer, 'select')
         except Exception:
             pass
         self._set_button_active(self.btn_edit_boxes, True)

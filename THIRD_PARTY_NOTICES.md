@@ -30,8 +30,11 @@ SHA-256. Users must review and comply with the upstream model terms:
 
 <https://huggingface.co/jiayuanz3/MedSAM2_pretrain>
 
-## Example medical imaging media
+## Example medical imaging data and media
 
-No source medical image volume is redistributed in this repository. Published
-screenshots and demonstrations, when present, are documented separately in
-`MEDIA_PROVENANCE.md` with their dataset citation and asset license.
+The repository includes one FLAIR NIfTI volume and one tumor-segmentation NIfTI
+label map from the public TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data package.
+Those files and their derived screenshots are licensed under CC BY 4.0 and are
+not covered by the repository's GPL-3.0-only software license. Their filenames,
+checksums, citation, processing record, and attribution are documented in
+`test_data/README.md` and `MEDIA_PROVENANCE.md`.

@@ -16,8 +16,10 @@ authors:
     affiliation: 1
   - name: "Hyunggun Kim"
     affiliation: 1
+    corresponding: true
   - name: "Yong Hwy Kim"
     affiliation: 2
+    corresponding: true
 
 affiliations:
   - name: "Department of Biomechatronic Engineering, Sungkyunkwan University, Suwon, Gyeonggi, Republic of Korea"
@@ -86,6 +88,6 @@ The authors declare no competing interests.
 
 # Acknowledgements
 
-This development was supported by the National Research Foundation of Korea (NRF) through the Ministry of Science and ICT (MSIT) (No. RS-2025-00517614). The funder had no role in software design, implementation, validation, manuscript preparation, or the decision to submit the work. We thank the developers of Napari [@sofroniew2022napari], SimpleITK [@lowekamp2013simpleitk], pydicom [@mason2011pydicom], NiBabel [@brett2024nibabel], PyVista [@sullivan2019pyvista], SAM [@kirillov2023sam], SAM2 [@ravi2024sam2], and Medical-SAM2 [@zhu2024medical] for releasing open-source software and models.
+This work was supported by the National Research Foundation of Korea (NRF) through the Ministry of Science and ICT (No. RS-2025-00517614). We thank the developers of Napari [@sofroniew2022napari], SimpleITK [@lowekamp2013simpleitk], pydicom [@mason2011pydicom], NiBabel [@brett2024nibabel], PyVista [@sullivan2019pyvista], SAM [@kirillov2023sam], SAM2 [@ravi2024sam2], and Medical-SAM2 [@zhu2024medical] for releasing open-source software and models.
 
 # References

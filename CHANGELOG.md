@@ -14,6 +14,7 @@ All notable changes to this project are documented here.
 - Unicode-safe NIfTI read/write fallback on Windows.
 - DICOM slice-spacing recovery from physical positions, valid tags, thickness, or folder names.
 - Ubuntu/Python 3.10 and Windows/Python 3.12 CI, packaging checks, and JOSS draft workflow.
+- One attributed TCIA UCSD-PTGBM FLAIR volume and label map as a reproducible CC BY 4.0 demonstration fixture.
 
 ### Changed
 
