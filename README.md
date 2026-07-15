@@ -8,13 +8,11 @@ Interactive Medical-SAM2 GUI is a local-first Napari application for semi-automa
 
 The software is intended for research annotation workflows. It is not a medical device and does not provide clinical decision support.
 
-![Manual mode with a reloaded multi-label mask and live source-grid volumes](./images/manual-mask-resume.png)
+![Manual mode with a public FLAIR volume, prompt layers, mask overlays, and color-matched source-grid volumes](./images/Figure1.png)
 
 The demonstration uses the public TCIA `UCSD-PTGBM-0001_01` case. The corresponding FLAIR volume and tumor label map are included in [`test_data/`](test_data/README.md) under CC BY 4.0. Asset provenance and attribution are recorded in [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
 
 ## Workflow
-
-![Manual mask resume workflow](./images/manual-mask-resume.gif)
 
 1. Select a root folder containing DICOM series, NIfTI volumes, or both.
 2. Choose Manual or Automatic mode and optional preprocessing.
@@ -35,7 +33,8 @@ The demonstration uses the public TCIA `UCSD-PTGBM-0001_01` case. The correspond
 - **Resumable editing:** imports combined or object-wise NIfTI, NRRD, MHA, and MHD label maps produced by this GUI or another tool.
 - **Geometry-aware mask import:** compares shape, spacing, origin, and direction; mismatches require confirmation before nearest-neighbor resampling.
 - **Source-grid canonical masks:** keeps the original image grid as the authoritative mask and synchronizes only edited display slices.
-- **Live volumetry:** shows every Object ID and Total in `mm^3` and mL using source-grid voxel counts and spacing.
+- **Live volumetry:** shows every Object ID with its matching mask color and reports per-object and Total values in `mm^3` and mL using source-grid voxel counts and spacing.
+- **Display-only rotation:** rotates the complete 2D viewer left or right in 90-degree increments without changing source arrays, physical geometry, or saved masks.
 - **DICOM spacing recovery:** recovers invalid zero slice spacing from physical slice positions, valid spacing tags, slice thickness, or a terminal folder value such as `3mm`.
 - **Windows Unicode paths:** falls back to NiBabel for NIfTI reads and writes when SimpleITK cannot handle non-ASCII paths.
 - **Optional 3D inspection:** retains PyVista volume rendering as a separate visualization tool.
@@ -126,6 +125,7 @@ These NIfTI files come from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data package
 - `Propagate`: run Medical-SAM2 between prompted slices.
 - `Edit Points` / `Edit Boxes`: adjust existing prompts.
 - `Manual Edit`: enable Napari paint, erase, and fill tools for final correction.
+- `Left 90` / `Reset` / `Right 90`: rotate or restore the 2D display while preserving source coordinates and saved geometry.
 
 For a single object, place boxes near the first and last slices containing the target, then propagate. For multiple objects, select the Object ID before adding each prompt. Propagation replaces only the prompted Object ID in generated frames; other labels and slices outside the range are preserved.
 
@@ -209,13 +209,13 @@ uv run pytest -q
 uv build
 ```
 
-The regression suite covers study discovery, DICOM spacing recovery, checkpoint download failure recovery, Unicode NIfTI paths, mask import/resampling, source-grid volume, save/resume behavior, and final manual-stroke synchronization. CI runs on Ubuntu with Python 3.10 and Windows with Python 3.12.
+The regression suite covers study discovery, DICOM spacing recovery, checkpoint download failure recovery, Unicode NIfTI paths, mask import/resampling, source-grid volume, save/resume behavior, final manual-stroke and box-drag synchronization, color-matched volume overlays, and display-only rotation. CI runs on Ubuntu with Python 3.10 and Windows with Python 3.12.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and pull-request guidance, [CHANGELOG.md](CHANGELOG.md) for release notes, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled upstream notices.
 
 ## Citation
 
-Release metadata are provided in [CITATION.cff](CITATION.cff). The related preprint is [arXiv:2602.22649](https://arxiv.org/abs/2602.22649).
+Release metadata are provided in [CITATION.cff](CITATION.cff).
 
 ```bibtex
 @software{medicalsam2gui2026,

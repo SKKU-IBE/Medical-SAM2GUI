@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite this release and the related preprint."
+message: "If you use this software, please cite this release."
 title: "Interactive Medical-SAM2 GUI: A Napari-based semi-automatic annotation tool for medical images"
 type: software
 authors:
@@ -30,7 +30,3 @@ keywords:
   - annotation
   - Napari
   - SAM2
-identifiers:
-  - type: other
-    value: "arXiv:2602.22649"
-    description: "Related preprint"
