@@ -36,6 +36,10 @@ bibliography: paper.bib
 
 Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 3D medical image volumes (\autoref{fig:manual-workflow}). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder and annotate automatically discovered cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files. Existing multi-label masks can be reloaded for continued annotation, and manual corrections are synchronized to the original image grid before export. During editing and saving, the tool reports color-matched per-object volumetry and provides optional 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden).
 
+The setup, patient navigation, and optional 3D inspection stages are summarized in \autoref{fig:workflow-overview}.
+
+![(a) Root-folder selection for DICOM and/or NIfTI data; (b) patient-by-patient navigation using proceed or skip; (c) 3D volume rendering that reports per-object volumetry computed from the source-grid masks. \label{fig:workflow-overview}](./images/Figure2.png)
+
 # Statement of need
 
 Voxel-level annotation is essential for developing and validating medical imaging algorithms, yet manual labeling is slow and expensive, especially for 3D scans with hundreds of slices. Expert-friendly platforms such as ITK-SNAP [@yushkevich2006itksnap], 3D Slicer [@fedorov2012slicer], and MITK [@wolf2005mitk] provide robust visualization and classical semi-automatic segmentation tools, but producing consistent 3D labels at cohort scale still requires substantial manual work and careful data handling.

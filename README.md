@@ -23,6 +23,8 @@ The demonstration uses the public TCIA `UCSD-PTGBM-0001_01` case. The correspond
 7. Optionally load a saved or external label map and continue editing.
 8. Review live per-object and total volumes, then save source-grid outputs.
 
+![Workflow overview showing setup, patient navigation, and 3D volume inspection](./images/Figure2.png)
+
 ## Features
 
 - **Automatic mixed-format discovery:** recursively builds one study queue from DICOM series and NIfTI volumes without a format-specific loading step.
@@ -76,6 +78,12 @@ The legacy command remains supported:
 uv run python medsam_gui.py
 ```
 
+<p align="center">
+  <img src="./images/Image-1.png" alt="Initial setup dialog with Manual mode and the bundled demonstration-data path selected" width="480">
+</p>
+
+The initial setup selects Manual or Automatic mode, optional preprocessing, and one cohort root containing DICOM studies, NIfTI volumes, or both.
+
 Checkpoint lookup follows this order:
 
 1. `--checkpoint PATH`
@@ -100,6 +108,12 @@ Select one root directory. The application recursively finds:
 NIfTI files are conservatively classified as label maps when their header intent is `label`, or when a finite, non-negative 3D volume contains integer-valued data with at most 64 unique labels. Detected label maps are excluded from the patient queue. If inspection fails, the file is retained and a warning is printed rather than silently dropping a possible image.
 
 Generated `*_masks` folders and `preprocessed` folders are never searched as patients. This keeps prior results beside their source study without presenting them as new image volumes.
+
+<p align="center">
+  <img src="./images/Image-2.png" alt="Automatically discovered UCSD-PTGBM study in the patient navigation dialog" width="480">
+</p>
+
+The patient dialog presents the automatically discovered queue and supports direct selection, proceeding with the current case, or skipping it.
 
 ## Bundled Demonstration Data
 
@@ -127,6 +141,10 @@ These NIfTI files come from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data package
 - `Manual Edit`: enable Napari paint, erase, and fill tools for final correction.
 - `Left 90` / `Reset` / `Right 90`: rotate or restore the 2D display while preserving source coordinates and saved geometry.
 
+| Box prompt | Point refinement |
+|---|---|
+| ![A box prompt surrounding Object 2](./images/Image-4.png) | ![Positive and negative points refining Object 2 within a box prompt](./images/Image-5.png) |
+
 For a single object, place boxes near the first and last slices containing the target, then propagate. For multiple objects, select the Object ID before adding each prompt. Propagation replaces only the prompted Object ID in generated frames; other labels and slices outside the range are preserved.
 
 ### Resume Or Import
@@ -143,6 +161,8 @@ Supported label-map formats are `.nii`, `.nii.gz`, `.nrrd`, `.mha`, and `.mhd`.
 - Geometry mismatches are shown before nearest-neighbor resampling; physically non-overlapping or empty results are rejected.
 
 Mask import is undoable. Untouched source slices remain unchanged when subsequent display-resolution edits are synchronized.
+
+![A reloaded multi-label mask with color-matched per-object and total source-grid volumes](./images/Image-3.png)
 
 ### Shortcuts
 
@@ -170,6 +190,12 @@ volume_mL  = volume_mm3 / 1000
 ```
 
 The overlay is debounced during brush movement and finalized at stroke release. Saving flushes every pending paint, erase, or fill change before volume calculation and export, so the overlay, NIfTI files, and `volumes.txt` use the same synchronized data.
+
+<p align="center">
+  <img src="./images/Image-6.png" alt="Optional 3D rendering with color-matched labels and per-object volumes" width="760">
+</p>
+
+The optional 3D renderer provides a separate shape inspection view; source-grid volume calculation does not require rendering.
 
 After the user confirms a parent folder, the application creates `<study>_masks` containing:
 
