@@ -3,8 +3,10 @@
 The Git history was rewritten on 2026-07-14 before the v1.1.0 release. The
 rewrite removed checkpoint binaries and medical demonstration media for which
 public redistribution rights were unavailable or insufficiently documented.
-The current repository contains only attributed public derived media and does
-not contain source medical volumes.
+The sanitized repository initially contained only attributed public derived
+media. It now also contains one explicitly licensed CC BY 4.0 FLAIR volume and
+label map in `test_data/`; no checkpoint, private medical data, or media with
+undocumented redistribution rights is included.
 
 ## Existing clones
 
@@ -21,8 +23,9 @@ cd Medical-SAM2GUI-clean
 git apply ../Medical-SAM2GUI/local-work.patch
 ```
 
-Review the patch before applying it and remove any checkpoint, medical image,
-mask, or private path content.
+Review the patch before applying it and remove any checkpoint, private medical
+image, undocumented mask, or private path content. The public fixture under
+`test_data/` is the only approved source-volume exception.
 
 ## Maintainer verification
 

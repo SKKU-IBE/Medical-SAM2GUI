@@ -30,11 +30,12 @@ uv run medical-sam2-download-checkpoint
 4. Describe manual GUI validation when a change affects Napari interaction.
 5. Update README or changelog text when commands, outputs, or compatibility change.
 
-Do not commit checkpoints, source medical-image volumes, patient screenshots,
-institutional paths, identifiers, or exported masks derived from non-public
-data. Public demonstration media must have documented redistribution rights,
-case-level provenance, processing steps, and attribution in
-[MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
+Do not commit checkpoints, additional source medical-image volumes, patient
+screenshots, institutional paths, identifiers, or exported masks derived from
+non-public data. The curated `test_data/` example is the only bundled source
+volume and label map. Any proposed replacement or addition requires documented
+redistribution rights, case-level provenance, processing steps, checksums, and
+attribution in [MEDIA_PROVENANCE.md](MEDIA_PROVENANCE.md).
 
 ## Bug reports
 

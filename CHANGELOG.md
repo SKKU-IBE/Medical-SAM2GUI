@@ -10,10 +10,12 @@ All notable changes to this project are documented here.
 - Mixed DICOM/NIfTI cohort discovery with conservative NIfTI label-map exclusion.
 - Manual-mode import of NIfTI, NRRD, and MetaImage label maps for resumed editing.
 - Replace/merge import modes, geometry validation, and nearest-neighbor resampling.
-- Source-grid canonical multi-label masks and live per-object/total volume overlay.
+- Source-grid canonical multi-label masks and a color-matched per-object/total volume overlay.
+- Display-only 90-degree view rotation controls for Manual and Auto modes.
 - Unicode-safe NIfTI read/write fallback on Windows.
 - DICOM slice-spacing recovery from physical positions, valid tags, thickness, or folder names.
 - Ubuntu/Python 3.10 and Windows/Python 3.12 CI, packaging checks, and JOSS draft workflow.
+- One attributed TCIA UCSD-PTGBM FLAIR volume and label map as a reproducible CC BY 4.0 demonstration fixture.
 
 ### Changed
 
@@ -28,6 +30,7 @@ All notable changes to this project are documented here.
 - Corrected volume calculation that previously used the display grid rather than source voxels.
 - Synchronized the final paint, erase, or fill event before save.
 - Prevented long Napari strokes from losing their final mouse-move segments.
+- Prevented box prompts from finalizing before the mouse button is released during a long drag.
 - Prevented stale generated object masks from remaining after an Object ID is deleted.
 - Recovered DICOM series rejected because `SpacingBetweenSlices` was zero.
 - Preserved an existing checkpoint when a forced replacement download fails.

@@ -16,8 +16,10 @@ authors:
     affiliation: 1
   - name: "Hyunggun Kim"
     affiliation: 1
+    corresponding: true
   - name: "Yong Hwy Kim"
     affiliation: 2
+    corresponding: true
 
 affiliations:
   - name: "Department of Biomechatronic Engineering, Sungkyunkwan University, Suwon, Gyeonggi, Republic of Korea"
@@ -30,9 +32,13 @@ bibliography: paper.bib
 
 # Summary
 
-![Interactive Medical-SAM2 GUI during resumed manual annotation, showing a public FLAIR volume, imported multi-label mask, current workflow controls, and source-grid volumetry. The displayed case is from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data [@gagnon2026ucsdptgbm]. \label{fig:manual-workflow}](./images/manual-mask-resume.png)
+![Interactive Medical-SAM2 GUI main view in Napari with image, prompt layers, mask overlays, and color-matched source-grid volumetry. The displayed case is from the TCIA UCSD-PTGBM BraTS-GLI 2024 Test Data [@gagnon2026ucsdptgbm]. \label{fig:manual-workflow}](./images/Figure1.png)
 
-Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 3D medical image volumes (\autoref{fig:manual-workflow}). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder and annotate automatically discovered cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files. Existing multi-label masks can be reloaded for continued annotation, and manual corrections are synchronized to the original image grid before export. During editing and saving, the tool reports per-object volumetry and provides optional 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden).
+Interactive Medical-SAM2 GUI is an open-source desktop application for semi-automatic annotation of 3D medical image volumes (\autoref{fig:manual-workflow}). Built on the Napari multi-dimensional viewer [@sofroniew2022napari], it integrates box/point prompting with SAM2-style propagation (treating a 3D scan as a “video” of slices) using Medical-SAM2 [@zhu2024medical] on top of SAM2 [@ravi2024sam2]. The tool is designed for clinician-friendly workflows: users can place DICOM series and/or NIfTI volumes under a single root folder and annotate automatically discovered cases sequentially, choosing to proceed or skip each case without repeatedly browsing individual patient files. Existing multi-label masks can be reloaded for continued annotation, and manual corrections are synchronized to the original image grid before export. During editing and saving, the tool reports color-matched per-object volumetry and provides optional 3D volume rendering to support rapid inspection and quantitative tracking (e.g., tumor burden).
+
+The setup, patient navigation, and optional 3D inspection stages are summarized in \autoref{fig:workflow-overview}.
+
+![(a) Root-folder selection for DICOM and/or NIfTI data; (b) patient-by-patient navigation using proceed or skip; (c) 3D volume rendering that reports per-object volumetry computed from the source-grid masks. \label{fig:workflow-overview}](./images/Figure2.png)
 
 # Statement of need
 
@@ -60,13 +66,13 @@ Community integrations such as MedSAMSlicer [@medsamslicer2023] and napari-sam [
 3. **Multi-object support with explicit control:** multiple objects can be annotated within the same volume. For multi-object scenarios, prompts can be provided on relevant slices for each object to maintain user control in complex cases.
 4. **Point prompts for refinement:** point prompts can be added to refine predictions on a slice; in the current workflow, a box prompt defines the object on that slice and points provide additional guidance for small additions or corrections.
 5. **Prompt-first correction and resumable annotation:** users typically obtain the best possible segmentation from prompts and propagation, and then perform a final manual correction step to “lock in” the label before saving. Previously saved or externally produced label maps can be reloaded, aligned to the source geometry, and edited without discarding unaffected slices or object IDs.
-6. **Quantitative export and visualization:** the tool maintains a multi-label mask on the original image grid, displays per-object and total volumes during editing, and offers 3D volume rendering to visually inspect the reconstructed shape. Combined and object-wise masks, together with a voxel-count volume report, preserve the source geometry via SimpleITK [@lowekamp2013simpleitk].
+6. **Quantitative export and visualization:** the tool maintains a multi-label mask on the original image grid, displays color-matched per-object and total volumes during editing, and offers 3D volume rendering to visually inspect the reconstructed shape. Combined and object-wise masks, together with a voxel-count volume report, preserve the source geometry via SimpleITK [@lowekamp2013simpleitk].
 
 # Software design
 
 The GUI is implemented in Python using Napari for multi-dimensional visualization [@sofroniew2022napari] and PyTorch for model execution [@paszke2019pytorch]. Medical-SAM2 [@zhu2024medical] provides SAM2-style memory-based propagation across slice sequences [@ravi2024sam2]. Source volumes are discovered as DICOM series or NIfTI files, while generated mask directories and label-map NIfTI files are omitted from the patient queue. DICOM loading first uses SimpleITK [@lowekamp2013simpleitk]; when malformed or zero-valued slice-spacing metadata prevents loading, pydicom [@mason2011pydicom] recovers slice order and spacing from physical positions, valid spacing tags, slice thickness, or an explicit folder-name fallback.
 
-The editable Napari mask is a display representation, whereas the canonical multi-label mask remains on the original image grid. Imported NIfTI, NRRD, and MetaImage label maps can be replaced or merged, and geometry mismatches are resampled with nearest-neighbor interpolation only after user confirmation. SimpleITK handles general medical-image I/O and geometry, with NiBabel [@brett2024nibabel] providing a Unicode-safe NIfTI path on Windows. Volumes are computed from source-grid voxel counts multiplied by source voxel volume, and the same canonical data are used for the live overlay, combined and object-wise NIfTI outputs, and the text report. PyVista supports optional 3D inspection [@sullivan2019pyvista]. Optional MRI preprocessing includes N4 bias-field correction [@tustison2010n4]. Automated tests cover DICOM spacing recovery, mask import and resampling, source-grid volumetry, Unicode paths, saving, and manual-edit synchronization. The source code, documentation, and tests are maintained in the public repository [@medicalsam2gui2026].
+The editable Napari mask is a display representation, whereas the canonical multi-label mask remains on the original image grid. Imported NIfTI, NRRD, and MetaImage label maps can be replaced or merged, and geometry mismatches are resampled with nearest-neighbor interpolation only after user confirmation. SimpleITK handles general medical-image I/O and geometry, with NiBabel [@brett2024nibabel] providing a Unicode-safe NIfTI path on Windows. Volumes are computed from source-grid voxel counts multiplied by source voxel volume, and the same canonical data are used for the color-matched live overlay, combined and object-wise NIfTI outputs, and the text report. The 2D display can be rotated in 90-degree increments without changing source arrays or saved image geometry. PyVista supports optional 3D inspection [@sullivan2019pyvista]. Optional MRI preprocessing includes N4 bias-field correction [@tustison2010n4]. Automated tests cover DICOM spacing recovery, mask import and resampling, source-grid volumetry, Unicode paths, saving, manual-edit and box-drag synchronization, and display-only rotation. A CC BY 4.0 FLAIR volume and label map from UCSD-PTGBM are bundled as a reproducible demonstration fixture [@gagnon2026ucsdptgbm]. The source code, documentation, and tests are maintained in the public repository.
 
 The software is intended for research annotation workflows and does not provide clinical decision support.
 
@@ -86,6 +92,6 @@ The authors declare no competing interests.
 
 # Acknowledgements
 
-This development was supported by the National Research Foundation of Korea (NRF) through the Ministry of Science and ICT (MSIT) (No. RS-2025-00517614). The funder had no role in software design, implementation, validation, manuscript preparation, or the decision to submit the work. We thank the developers of Napari [@sofroniew2022napari], SimpleITK [@lowekamp2013simpleitk], pydicom [@mason2011pydicom], NiBabel [@brett2024nibabel], PyVista [@sullivan2019pyvista], SAM [@kirillov2023sam], SAM2 [@ravi2024sam2], and Medical-SAM2 [@zhu2024medical] for releasing open-source software and models.
+This work was supported by the National Research Foundation of Korea (NRF) through the Ministry of Science and ICT (No. RS-2025-00517614). We thank the developers of Napari [@sofroniew2022napari], SimpleITK [@lowekamp2013simpleitk], pydicom [@mason2011pydicom], NiBabel [@brett2024nibabel], PyVista [@sullivan2019pyvista], SAM [@kirillov2023sam], SAM2 [@ravi2024sam2], and Medical-SAM2 [@zhu2024medical] for releasing open-source software and models.
 
 # References

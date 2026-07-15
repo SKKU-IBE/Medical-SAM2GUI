@@ -16,10 +16,12 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtGui import QKeySequence
 from qtpy.QtCore import Qt, QTimer
-import threading
 from PIL import Image
 
+from gui.box_interactions import DeferredBoxCommit, set_shapes_mode
 from gui.rendering import render_manual_volume
+from gui.view_controls import create_view_rotation_controls
+from gui.volume_overlay import VolumeOverlayWidget, get_viewer_canvas_widget
 from gui.io import (
     display_mask_to_source,
     get_mask_geometry,
@@ -57,7 +59,7 @@ class ManualPromptNapariGUI(QWidget):
         self.pos_points = []  # (t, obj_id, y, x)
         self.neg_points = []
         self.box_prompts = []  # (t, obj_id, x1, y1, x2, y2)
-        self._box_edit_timer = None
+        self._box_edit_committer = None
         self._updating_layers = False
 
         self.viewer = napari.Viewer(title=self._get_patient_display_name())
@@ -178,7 +180,18 @@ class ManualPromptNapariGUI(QWidget):
         return base
 
     def _setup_volume_overlay(self):
+        self._volume_overlay_uses_qt = False
         try:
+            canvas_widget = get_viewer_canvas_widget(self.viewer)
+            if canvas_widget is not None:
+                self.volume_overlay = VolumeOverlayWidget(canvas_widget)
+                self._volume_overlay_uses_qt = True
+                try:
+                    self.viewer.text_overlay.visible = False
+                except Exception:
+                    pass
+                return
+
             overlay = self.viewer.text_overlay
             overlay.visible = True
             overlay.position = 'top_right'
@@ -303,8 +316,14 @@ class ManualPromptNapariGUI(QWidget):
                 lines.append(f"Total: {total:,.2f} mm3 ({total / 1000.0:,.3f} mL)")
             else:
                 lines.append('No mask')
-            self.volume_overlay.text = '\n'.join(lines)
-            self.volume_overlay.visible = True
+            if self._volume_overlay_uses_qt:
+                self.volume_overlay.set_entries(
+                    [(object_id, volume_mm3) for object_id, _, volume_mm3 in entries],
+                    self.mask_layer,
+                )
+            else:
+                self.volume_overlay.text = '\n'.join(lines)
+                self.volume_overlay.visible = True
         except Exception as exc:
             print(f"Volume overlay update failed: {exc}")
 
@@ -362,6 +381,12 @@ class ManualPromptNapariGUI(QWidget):
             )
         except Exception as exc:
             print(f"Labels update tracking unavailable: {exc}")
+        try:
+            self.mask_layer.events.colormap.connect(
+                lambda event=None: self._update_volume_overlay_now()
+            )
+        except Exception as exc:
+            print(f"Label color tracking unavailable: {exc}")
 
     def _on_manual_labels_update(self, event=None):
         if not getattr(self, 'manual_edit_enabled', False):
@@ -649,7 +674,13 @@ class ManualPromptNapariGUI(QWidget):
             print(f"Failed to set manual mode '{mode_name}': {e}")
 
     def _setup_manual_box_editing_events(self):
-        self._box_edit_timer = None
+        self._box_edit_committer = DeferredBoxCommit(
+            self,
+            lambda: self._sync_manual_boxes_with_rectangle_constraint(
+                record_history=True
+            ),
+        )
+
         @self.box_layer.events.data.connect
         def on_boxes_data_change():
             if not hasattr(self, 'box_layer') or not self.box_layer.editable:
@@ -658,10 +689,7 @@ class ManualPromptNapariGUI(QWidget):
                 return
             if getattr(self, '_updating_layers', False):
                 return
-            if self._box_edit_timer:
-                self._box_edit_timer.cancel()
-            self._box_edit_timer = threading.Timer(0.3, lambda: self._sync_manual_boxes_with_rectangle_constraint(record_history=True))
-            self._box_edit_timer.start()
+            self._box_edit_committer.schedule()
         # store last known box prompts to detect manual edits even when constraints unchanged
         try:
             self._last_box_prompts_snapshot = list(self.box_prompts)
@@ -672,8 +700,6 @@ class ManualPromptNapariGUI(QWidget):
         if getattr(self, '_updating_layers', False) or not self.box_layer.editable:
             return
         try:
-            if len(self.box_layer.data) == 0:
-                return
             self._updating_layers = True
             current_boxes = list(self.box_layer.data)
             updated_boxes = []
@@ -825,6 +851,10 @@ class ManualPromptNapariGUI(QWidget):
         self.oid_spin.valueChanged.connect(self.on_obj_change)
         oid_hl.addWidget(self.oid_spin)
         layout.addLayout(oid_hl)
+        self.view_rotation_controls = create_view_rotation_controls(
+            self, self.viewer
+        )
+        layout.addWidget(self.view_rotation_controls)
         btns = [
             ('Add + Point', self.enable_add_positive, 'btn_add_pos'),
             ('Add - Point', self.enable_add_negative, 'btn_add_neg'),
@@ -914,9 +944,9 @@ class ManualPromptNapariGUI(QWidget):
         if not getattr(self, 'manual_edit_enabled', False):
             self.mask_layer.mouse_drag_callbacks.clear()
         try:
-            self.box_layer.mouse_drag_callbacks.clear()
+            self.box_layer.mode = 'pan_zoom'
         except Exception:
-            pass
+            self.box_layer.mouse_drag_callbacks.clear()
         if self.active_tool == 'edit_pts':
             self.user_pts_layer.editable = False
         if self.active_tool == 'edit_boxes':
@@ -995,79 +1025,11 @@ class ManualPromptNapariGUI(QWidget):
         self._select_layer(self.box_layer)
         self.box_layer.editable = True
         try:
-            self.box_layer.mode = 'add_rectangle'
+            set_shapes_mode(self.box_layer, 'add_rectangle')
         except Exception:
             pass
         self._set_button_active(self.btn_add_box, True)
         self.add_mode = 'box'
-
-        temp_state = {
-            'active': False,
-            't': None,
-            'x0': None,
-            'y0': None,
-            'rect_idx': None,
-        }
-
-        def cb(layer, event):
-            etype = getattr(event, 'type', None)
-            if etype == 'mouse_press':
-                temp_state['t'] = int(self.viewer.dims.current_step[0])
-                y0, x0 = map(int, event.position[1:])
-                temp_state['x0'], temp_state['y0'] = x0, y0
-                temp_state['active'] = True
-                temp_state['rect_idx'] = None
-                # clear redo stack on new user action
-                self.redo_history.clear()
-            elif etype == 'mouse_move' and temp_state['active']:
-                try:
-                    self.box_layer.mode = 'add_rectangle'
-                except Exception:
-                    pass
-                y1, x1 = map(int, event.position[1:])
-                x1, x2 = sorted([temp_state['x0'], x1])
-                y1, y2 = sorted([temp_state['y0'], y1])
-                rect = np.array([
-                    [temp_state['t'], y1, x1],
-                    [temp_state['t'], y1, x2],
-                    [temp_state['t'], y2, x2],
-                    [temp_state['t'], y2, x1],
-                ], dtype=float)
-                try:
-                    self._updating_layers = True
-                    if temp_state['rect_idx'] is None:
-                        self.box_layer.add_rectangles([rect])
-                        temp_state['rect_idx'] = len(self.box_layer.data) - 1
-                    else:
-                        data = list(self.box_layer.data)
-                        data[temp_state['rect_idx']] = rect
-                        self.box_layer.data = data
-                finally:
-                    self._updating_layers = False
-            elif etype == 'mouse_release' and temp_state['active']:
-                try:
-                    self.box_layer.mode = 'select'
-                except Exception:
-                    pass
-                y1, x1 = map(int, event.position[1:])
-                x1, x2 = sorted([temp_state['x0'], x1])
-                y1, y2 = sorted([temp_state['y0'], y1])
-                t = temp_state['t']
-                self.box_prompts.append((t, self.current_obj_id, x1, y1, x2, y2))
-                self.prompt_history.append(('box', t, self.current_obj_id, x1, y1, x2, y2))
-                self.update_layers()
-                self._record_prompt_event('box', t, self.current_obj_id)
-                print(f"Added box at frame {t}, corners ({x1}, {y1}) to ({x2}, {y2})")
-                temp_state['active'] = False
-                temp_state['rect_idx'] = None
-                temp_state['t'] = None
-                temp_state['x0'] = None
-                temp_state['y0'] = None
-                # Exit box-add mode after one completed box to avoid drag callbacks
-                # interfering with subsequent pan/zoom interactions.
-                self.cancel_prompt_mode()
-
-        self.box_layer.mouse_drag_callbacks.append(cb)
 
     def toggle_manual_annotation(self):
         # Enable napari's native painting/rectangle drawing without needing Add Box
@@ -1081,7 +1043,7 @@ class ManualPromptNapariGUI(QWidget):
             self.mask_layer.editable = True
             self.mask_layer.selected_label = self.current_obj_id
             self.box_layer.editable = True
-            self.box_layer.mode = 'add_rectangle'
+            set_shapes_mode(self.box_layer, 'add_rectangle')
             self._set_prompt_layers_visibility(False)
             self._select_layer(self.mask_layer)
             self._set_button_active(self.manual_edit_button, True)
@@ -1211,7 +1173,7 @@ class ManualPromptNapariGUI(QWidget):
         except Exception:
             pass
         try:
-            self.box_layer.mode = 'select'
+            set_shapes_mode(self.box_layer, 'select')
         except Exception:
             pass
         self._set_button_active(self.btn_edit_boxes, True)
