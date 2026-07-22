@@ -1,18 +1,21 @@
-@article{paszke2019pytorch,
+@inproceedings{paszke2019pytorch,
   title     = {PyTorch: An Imperative Style, High-Performance Deep Learning Library},
-  author    = {Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and others},
-  journal   = {Advances in Neural Information Processing Systems},
-  volume    = {32},
+  author    = {Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and Kopf, Andreas and Yang, Edward and DeVito, Zachary and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle = {Advances in Neural Information Processing Systems 32},
+  pages     = {8024--8035},
   year      = {2019},
-  doi       = {10.48550/arXiv.1912.01703}
+  publisher = {Curran Associates, Inc.},
+  url       = {https://proceedings.neurips.cc/paper/2019/hash/bdbca288fee7f92f2bfa9f7012727740-Abstract.html}
 }
 
-@article{sofroniew2022napari,
+@software{napari2025,
   title     = {napari: a multi-dimensional image viewer for Python},
-  author    = {Sofroniew, Nicholas and Lambert, Talley and Evans, Kat and Nunez-Iglesias, Juan and Yamauchi, Ka and Solak, Ahmet Caglar and Koyama, Masataka and others},
-  journal   = {bioRxiv},
-  year      = {2022},
-  doi       = {10.1101/2022.08.02.502506}
+  author    = {{napari contributors}},
+  version   = {0.6.6},
+  publisher = {Zenodo},
+  year      = {2025},
+  doi       = {10.5281/zenodo.17367124},
+  url       = {https://github.com/napari/napari/tree/v0.6.6}
 }
 
 @article{lowekamp2013simpleitk,
@@ -79,19 +82,21 @@
   doi       = {10.1016/j.media.2024.103207}
 }
 
-@misc{diazpinto2023deepedit,
+@inproceedings{diazpinto2022deepedit,
   title        = {DeepEdit: Deep Editable Learning for Interactive Segmentation of 3D Medical Images},
-  author       = {Diaz-Pinto, Andres and Mehta, Pritesh and Alle, Sachidanand and Asad, Muhammad and Brown, Richard and Nath, Vishwesh and Ihsani, Alvin and Antonelli, Michela and Palkovics, Daniel and Pinter, Csaba and others},
-  year         = {2023},
-  eprint       = {2305.10655},
-  archivePrefix= {arXiv},
-  primaryClass = {eess.IV},
-  doi          = {10.48550/arXiv.2305.10655}
+  author       = {Diaz-Pinto, Andres and Mehta, Pritesh and Alle, Sachidanand and Asad, Muhammad and Brown, Richard and Nath, Vishwesh and Ihsani, Alvin and Antonelli, Michela and Palkovics, Daniel and Pinter, Csaba and Alkalay, Ron and Pieper, Steve and Roth, Holger R. and Xu, Daguang and Dogra, Prerna and Vercauteren, Tom and Feng, Andrew and Quraini, Abood and Ourselin, Sebastien and Cardoso, M. Jorge},
+  booktitle    = {Data Augmentation, Labelling, and Imperfections: Second MICCAI Workshop, DALI 2022, Held in Conjunction with MICCAI 2022, Proceedings},
+  series       = {Lecture Notes in Computer Science},
+  volume       = {13567},
+  pages        = {11--21},
+  publisher    = {Springer},
+  year         = {2022},
+  doi          = {10.1007/978-3-031-17027-0_2}
 }
 
 @article{berg2019ilastik,
   title     = {ilastik: interactive machine learning for (bio)image analysis},
-  author    = {Berg, Stuart and Kutra, Dominik and Kroeger, Thorben and Straehle, Christoph N. and Kausler, Bernhard X. and Haubold, Carsten and Schiegg, Marco and Ales, Juan and Beier, Thorsten and others},
+  author    = {Berg, Stuart and Kutra, Dominik and Kroeger, Thorben and Straehle, Christoph N. and Kausler, Bernhard X. and Haubold, Carsten and Schiegg, Martin and Ales, Janez and Beier, Thorsten and Rudy, Markus and Eren, Kemal and Cervantes, Jaime I. and Xu, Buote and Beuttenmueller, Fynn and Wolny, Adrian and Zhang, Chong and Koethe, Ullrich and Hamprecht, Fred A. and Kreshuk, Anna},
   journal   = {Nature Methods},
   volume    = {16},
   pages     = {1226--1232},
@@ -110,52 +115,55 @@
   doi       = {10.1038/s41598-017-17204-5}
 }
 
-@misc{labelstudio,
+@software{labelstudio,
   title        = {Label Studio: Open Source Data Labeling Tool},
-  author       = {{HumanSignal}},
+  author       = {Tkachenko, Maxim and Malyuk, Mikhail and Holmanyuk, Andrey and Liubimov, Nikolai},
   year         = {2025},
-  howpublished = {GitHub repository},
   url          = {https://github.com/HumanSignal/label-studio},
-  note         = {Accessed 2026-07-14}
+  note         = {Open-source software; accessed 2026-07-21}
 }
 
-@misc{cvat,
+@software{cvat,
   title        = {{CVAT}: Computer Vision Annotation Tool},
-  author       = {{CVAT.ai}},
-  year         = {2025},
-  howpublished = {GitHub repository},
-  url          = {https://github.com/cvat-ai/cvat},
-  note         = {Accessed 2026-07-14}
-}
-
-@misc{kirillov2023sam,
-  title        = {Segment Anything},
-  author       = {Kirillov, Alexander and Mintun, Eric and Ravi, Nikhila and Mao, Hanzi and Rolland, Chloe and Gustafson, Laura and Xiao, Tete and Whitehead, Spencer and Berg, Alexander C. and Lo, Wan-Yen and Doll{\'a}r, Piotr and Girshick, Ross},
+  author       = {{CVAT.ai Corporation}},
+  version      = {2.25.0},
+  publisher    = {Zenodo},
   year         = {2023},
-  eprint       = {2304.02643},
-  archivePrefix= {arXiv},
-  primaryClass = {cs.CV},
-  doi          = {10.48550/arXiv.2304.02643}
+  doi          = {10.5281/zenodo.4009388},
+  url          = {https://github.com/cvat-ai/cvat},
+  note         = {Accessed 2026-07-21}
 }
 
-@misc{ravi2024sam2,
-  title        = {{SAM} 2: Segment Anything in Images and Videos},
-  author       = {Ravi, Nikhila and others},
-  year         = {2024},
-  eprint       = {2408.00714},
-  archivePrefix= {arXiv},
-  primaryClass = {cs.CV},
-  doi          = {10.48550/arXiv.2408.00714}
+@inproceedings{kirillov2023sam,
+  title     = {Segment Anything},
+  author    = {Kirillov, Alexander and Mintun, Eric and Ravi, Nikhila and Mao, Hanzi and Rolland, Chloe and Gustafson, Laura and Xiao, Tete and Whitehead, Spencer and Berg, Alexander C. and Lo, Wan-Yen and Doll{\'a}r, Piotr and Girshick, Ross},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision},
+  pages     = {4015--4026},
+  month     = oct,
+  year      = {2023},
+  doi       = {10.1109/ICCV51070.2023.00371},
+  url       = {https://openaccess.thecvf.com/content/ICCV2023/html/Kirillov_Segment_Anything_ICCV_2023_paper.html}
 }
 
-@misc{zhu2024medical,
-  title        = {Medical {SAM} 2: Segment medical images as video via Segment Anything Model 2},
-  author       = {Zhu, Jiayuan and Hamdi, Abdullah and Qi, Yunli and Jin, Yueming and Wu, Junde},
-  year         = {2024},
-  eprint       = {2408.00874},
-  archivePrefix= {arXiv},
-  primaryClass = {eess.IV},
-  doi          = {10.48550/arXiv.2408.00874}
+@inproceedings{ravi2025sam2,
+  title     = {{SAM} 2: Segment Anything in Images and Videos},
+  author    = {Ravi, Nikhila and Gabeur, Valentin and Hu, Yuan-Ting and Hu, Ronghang and Ryali, Chaitanya and Ma, Tengyu and Khedr, Haitham and R{\"a}dle, Roman and Rolland, Chloe and Gustafson, Laura and Mintun, Eric and Pan, Junting and Alwala, Kalyan Vasudev and Carion, Nicolas and Wu, Chao-Yuan and Girshick, Ross and Doll{\'a}r, Piotr and Feichtenhofer, Christoph},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2025},
+  url       = {https://openreview.net/forum?id=Ha6RTeWMd0},
+  eprint    = {2408.00714},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV}
+}
+
+@article{zhu2024medical,
+  title   = {Medical {SAM} 2: Segment medical images as video via Segment Anything Model 2},
+  author  = {Zhu, Jiayuan and Hamdi, Abdullah and Qi, Yunli and Jin, Yueming and Wu, Junde},
+  journal = {arXiv},
+  volume  = {abs/2408.00874},
+  year    = {2024},
+  doi     = {10.48550/arXiv.2408.00874},
+  url     = {https://arxiv.org/abs/2408.00874}
 }
 
 @article{ma2024medsam,
@@ -169,41 +177,42 @@
   doi       = {10.1038/s41467-024-44824-z}
 }
 
-@misc{medsamslicer2023,
+@software{medsamslicer2024,
   title        = {{MedSAMSlicer}: 3D Slicer Plugin for {MedSAM}},
   author       = {{Bo Wang Lab}},
-  year         = {2025},
-  howpublished = {GitHub repository},
+  version      = {0.13},
+  year         = {2024},
   url          = {https://github.com/bowang-lab/MedSAMSlicer},
-  note         = {Accessed 2026-07-14}
+  note         = {GitHub repository; accessed 2026-07-21}
 }
 
-@misc{naparisam2023,
+@software{naparisam2023,
   title        = {napari-sam: Segment Anything in napari},
-  author       = {{MIC-DKFZ}},
-  year         = {2025},
-  howpublished = {GitHub repository},
+  author       = {Gotkowski, Karol and Isensee, Fabian},
+  version      = {0.4.13},
+  year         = {2023},
   url          = {https://github.com/MIC-DKFZ/napari-sam},
-  note         = {Accessed 2026-07-14}
+  note         = {GitHub repository; accessed 2026-07-21}
 }
 
-@article{mason2011pydicom,
-  title     = {SU-E-T-33: {pydicom}: An Open Source {DICOM} Library},
-  author    = {Mason, Darcy},
-  journal   = {Medical Physics},
-  volume    = {38},
-  number    = {6Part10},
-  pages     = {3493--3493},
-  year      = {2011},
-  doi       = {10.1118/1.3611983}
-}
-
-@software{brett2024nibabel,
-  title     = {nipy/nibabel: 5.2.1},
-  author    = {Brett, Matthew and Markiewicz, Christopher J. and Hanke, Michael and C{^o}t{\'e}, Marc-Alexandre and Cipollini, Ben and McCarthy, Paul and others},
+@software{mason2024pydicom,
+  title     = {pydicom/pydicom: pydicom 3.0.1},
+  author    = {Mason, Darcy and scaramallion and mrbean-bremen and rhaxton and Suever, Jonathan and Papadopoulos Orfanos, Dimitri and Vanessasaurus and Lemaitre, Guillaume and Panchal, Aditya and Rothberg, Alex and Herrmann, Markus D. and Massich, Joan and Kerns, James and van Golen, Korijn and Bridge, Chris and Biggs, Simon and Robitaille, Thomas and moloney and Shun-Shin, Matthew and Conrad, Blair and pawelzajdel and Mattes, Markus and Lyu, YoungKi and Cogan, Tim and Baratz, Zvi and Morency, F{\'e}lix C. and Taylor and Sentner, Thom},
+  version   = {3.0.1},
   publisher = {Zenodo},
   year      = {2024},
-  doi       = {10.5281/zenodo.10714563}
+  doi       = {10.5281/zenodo.13824606},
+  url       = {https://github.com/pydicom/pydicom/tree/v3.0.1}
+}
+
+@software{brett2025nibabel,
+  title     = {nipy/nibabel: 5.3.3},
+  author    = {Brett, Matthew and Markiewicz, Christopher J. and Hanke, Michael and C{\^o}t{\'e}, Marc-Alexandre and Cipollini, Ben and Papadopoulos Orfanos, Dimitri and McCarthy, Paul and Jarecka, Dorota and Cheng, Christopher P. and Larson, Eric and Halchenko, Yaroslav O. and Cottaar, Michiel and Ghosh, Satrajit and Wassermann, Demian and Gerhard, Stephan and Lee, Gregory R. and Baratz, Zvi and Moloney, Brendan and Wang, Hao-Ting and Kastman, Erik and Kaczmarzyk, Jakub and Guidotti, Roberto and Daniel, Jonathan and Duek, Or and Rokem, Ariel and Scheltienne, Mathieu and Madison, Cindee and S{\'o}lon, Anibal and Morency, F{\'e}lix C. and Goncalves, Mathias and Markello, Ross and Riddell, Cameron and Burns, Christopher and Millman, Jarrod and Gramfort, Alexandre and Lepp{\"a}kangas, Jaakko and van den Bosch, Jasper J. F. and Vincent, Robert D. and Braun, Henry and Subramaniam, Krish and Van, Andrew and Legarreta, Jon Haitz and Gorgolewski, Krzysztof J. and Raamana, Pradeep Reddy and Klug, Julian and Vos de Wael, Reinder and Nichols, B. Nolan and Baker, Eric M. and Koudoro, Serge and Hayashi, Soichi and Pinsard, Basile and Haselgrove, Christian and Hymers, Mark and Esteban, Oscar and P{\'e}rez-Garc{\'i}a, Fernando and Becq, Guillaume and Dock{\`e}s, J{\'e}r{\'o}me and Oosterhof, Nikolaas N. and Amirbekian, Bago and Christian, Horea and Nimmo-Smith, Ian and Nguyen, Ly and Suter, Peter and Reddigari, Samir and St-Jean, Samuel and Panfilov, Egor and Garyfallidis, Eleftherios and Varoquaux, Gael and Newton, Joshua and Hahn, Kevin S. and Waller, Lea and Hinds, Oliver P. and Sandro and Fauber, Bennet and Dewey, Blake and Perez, Fabian and Roberts, Jacob and Poline, Jean-Baptiste and Stutters, Jon and Jordan, Kesshi and Cieslak, Matthew and Moreno, Miguel Estevan and Hrn{\v c}iar, Tom{\'a}{\v s} and Haenel, Valentin and Schwartz, Yannick and Darwin, Benjamin C. and Thirion, Bertrand and Gauthier, Carl and Solovey, Igor and Gonzalez, Ivan and Palasubramaniam, Jath and Lecher, Justin and Leinweber, Katrin and Raktivan, Konstantinos and Cal{\'a}bkov{\'a}, Mark{\'e}ta and Fischer, Peter and Gervais, Philippe and Gadde, Syam and Ballinger, Thomas and Roos, Thomas and Reddam, Venkateswara Reddy and freec84},
+  publisher = {Zenodo},
+  version   = {5.3.3},
+  year      = {2025},
+  doi       = {10.5281/zenodo.17833605},
+  url       = {https://github.com/nipy/nibabel/tree/5.3.3}
 }
 
 @article{sullivan2019pyvista,
@@ -217,31 +226,29 @@
   doi       = {10.21105/joss.01450}
 }
 
-@misc{gagnon2026ucsdptgbm,
-  title        = {The University of California San Diego Post-Treatment Glioblastoma ({UCSD-PTGBM}) Annotated Multimodal {MRI} Dataset},
-  author       = {Gagnon, Louis and Gupta, Devika and Nguyen, Uyen and Correia de Verdier, Maria and Saluja, Rishabh and Mastorakos, George and White, Nathan and Goodwill, Victoria and McDonald, Carrie R. and Beaumont, Thomas and Conlin, Christopher and Seibert, Tyler M. and Hattangadi-Gluth, Jona and Kesari, Santosh and Schulte, John D. and Piccioni, David and Schmainda, Kathleen M. and Farid, Nikdokht and Dale, Anders M. and Rudie, Jeffrey D.},
-  year         = {2026},
-  version      = {3},
-  publisher    = {The Cancer Imaging Archive},
-  doi          = {10.7937/fwv2-dt74},
-  url          = {https://www.cancerimagingarchive.net/collection/ucsd-ptgbm/},
-  note         = {BraTS-GLI 2024 Test Data; CC BY 4.0}
-}
-
-@misc{hong2026kbts,
-  title        = {An Interactive Medical-{SAM2} Napari {GUI} Tool for Efficient Segmentation and Volumetry of Brain Tumor},
+@inproceedings{hong2026kbts,
+  title        = {An Interactive {Medical-SAM2} {Napari} {GUI} Tool for Efficient Segmentation and Volumetry of Brain Tumor},
   author       = {Hong, Woojae and Hwang, Jong Ha and Park, Hye Seok and Nam, Sun Mo and Kim, Seong-Min and Choi, Joongyeon and Ko, Minsung and Jeong, Soohwan and Kim, Hyunggun and Kim, Yong Hwy},
+  booktitle    = {Abstract Book of the 20th Korean Brain Tumor Society Winter Meeting},
   year         = {2026},
-  howpublished = {Conference presentation at the 20th Korean Brain Tumor Society Winter Meeting},
+  month        = feb,
+  pages        = {61--63},
+  address      = {Pyeongchang, Republic of Korea},
+  organization = {Korean Brain Tumor Society},
+  note         = {Conference abstract and oral presentation},
   url          = {https://www.braintumor.or.kr/workshop/202601/sub02.html},
-  note         = {Official conference program}
+  urldate      = {2026-07-15}
 }
 
-@misc{hong2026kns,
-  title        = {Evaluation of a Novel Semi-Automated Interactive Tool for Enhancing Consistency and Precision of Brain Tumor Segmentation},
+@inproceedings{hong2026kns,
+  title        = {Evaluation of Novel Semi-Automated Interactive Tool for Enhancing Consistency and Precision of Brain Tumor Segmentation},
   author       = {Hong, Woojae and Hwang, Jong Ha and Park, Hye Seok and Nam, Sun Mo and Chung, Jiyong and Kim, Seong-Min and Kim, Hyunggun and Kim, Yong Hwy},
+  booktitle    = {The 44th Annual Spring Meeting of the Korean Neurosurgical Society},
   year         = {2026},
-  howpublished = {Conference presentation at the 44th Annual Spring Meeting of the Korean Neurosurgical Society},
-  url          = {https://www.neurosurgery.or.kr/workshop/2026Spring/file/2026%20KNS%20%EC%A0%9C44%EC%B0%A8%20%EC%B6%98%EA%B3%84%ED%95%99%EC%88%A0%EB%8C%80%ED%9A%8C_%ED%94%84%EB%A1%9C%EA%B7%B8%EB%9E%A8%EB%B6%81_%EC%88%98%EC%A0%95_Fin_260527.pdf},
-  note         = {Official conference program}
+  month        = apr,
+  address      = {Jeju, Republic of Korea},
+  organization = {Korean Neurosurgical Society},
+  note         = {Conference abstract and oral presentation; Scientific Session II, April 17, 2026; abstract ID 4438},
+  url          = {https://www.neurosurgery.or.kr/popup/abstract/view.php?sid=4438&code=2026Spring},
+  urldate      = {2026-07-15}
 }
